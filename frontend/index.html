@@ -1,0 +1,113 @@
+<!--
+  旅游规划多智能体 — 前端首页
+
+  结构在本文件；交互逻辑在 app.js（Vue3 CDN）。
+  启动后端后访问 http://127.0.0.1:8000/
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>旅游规划多智能体</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://unpkg.com/marked@15.0.7/marked.min.js"></script>
+  <script src="https://unpkg.com/dompurify@3.2.6/dist/purify.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <div class="page" :class="{ 'has-map': mapUrl }">
+      <h1 class="brand">旅游规划多智能体</h1>
+      <p class="subtitle">输入一句自然语言需求；缺关键信息时会弹出确认卡。过程按步骤展示，最终方案流式生成。</p>
+
+      <div class="panel">
+        <textarea v-model="query" maxlength="300" placeholder="例如：帮我规划下周六从杭州去苏州一日游，预算 800..." :disabled="awaitingClarify"></textarea>
+        <div class="actions">
+          <button class="btn btn-primary" :disabled="!canSubmit" @click="startPlan">
+            {{ loading ? "规划中..." : "开始规划" }}
+          </button>
+          <button class="btn btn-ghost" :disabled="loading || awaitingClarify" @click="fillSample">填入示例</button>
+          <span class="char-count">{{ queryLen }}/300</span>
+        </div>
+      </div>
+
+      <div class="panel clarify-card" v-if="awaitingClarify">
+        <h2 class="section-title">请确认旅行参数</h2>
+        <p class="clarify-hint">标红项为关键信息，补全后才能继续；灰色标注为未提供时的默认值，可直接改或点继续。</p>
+        <div class="clarify-grid">
+          <label v-for="key in ['origin','destination','date','days','budget','preferences','pace']" :key="key"
+            :class="{ 'is-critical-missing': isCriticalMissing(key) }">
+            <span class="field-label">
+              {{ slotLabel(key) }}
+              <em v-if="isDefaultApplied(key)" class="default-tag">未提供，已用默认</em>
+            </span>
+            <input v-if="key !== 'days' && key !== 'preferences'" v-model="clarifyForm[key]" :type="key === 'date' ? 'date' : 'text'" />
+            <input v-else-if="key === 'days'" v-model.number="clarifyForm.days" type="number" min="1" max="30" />
+            <textarea v-else v-model="clarifyForm.preferences" rows="2"></textarea>
+          </label>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" :disabled="!canConfirmClarify" @click="confirmClarify">确认并继续</button>
+        </div>
+      </div>
+
+      <h2 class="section-title">执行过程</h2>
+      <div class="steps" v-if="steps.some(s => s.status !== 'pending') || loading || awaitingClarify">
+        <div
+          v-for="step in steps"
+          :key="step.id"
+          class="step-card"
+          :class="'status-' + step.status"
+        >
+          <div class="step-head">
+            <span class="step-spinner" v-if="step.status === 'active'" aria-hidden="true"></span>
+            <span class="step-mark" v-else-if="step.status === 'done'">✓</span>
+            <span class="step-mark muted" v-else-if="step.status === 'skipped'">—</span>
+            <span class="step-mark muted" v-else>○</span>
+            <strong>{{ step.label }}</strong>
+            <span class="step-status-text">{{
+              step.status === 'active' ? '进行中' :
+              step.status === 'done' ? '完成' :
+              step.status === 'skipped' ? '已跳过' : '等待'
+            }}</span>
+          </div>
+          <ul class="step-tools" v-if="step.tools.length">
+            <li v-for="(t, idx) in step.tools" :key="idx">
+              <details>
+                <summary>{{ t.name }}</summary>
+                <pre class="tool-params">{{ JSON.stringify(t.args, null, 2) }}</pre>
+                <pre v-if="t.result" class="tool-params">{{ t.result }}</pre>
+              </details>
+            </li>
+          </ul>
+        </div>
+      </div>
+      <p class="empty" v-else>尚未开始。点击「开始规划」后，这里会按步骤显示进度。</p>
+
+      <h2 class="section-title">最终方案</h2>
+      <div class="result-actions" v-if="finalText">
+        <a v-if="savedUrl" class="btn btn-ghost" :href="savedUrl" download>下载本次方案</a>
+        <a v-if="traceUrl" class="btn btn-ghost" :href="traceUrl" target="_blank" rel="noopener">在 LangSmith 查看本次追踪</a>
+      </div>
+      <div class="result-layout" v-if="finalText">
+        <div class="result markdown-body" v-html="renderedHtml"></div>
+        <div class="map-pane">
+          <iframe
+            v-if="mapUrl"
+            class="map-frame"
+            :src="mapUrl"
+            sandbox="allow-scripts allow-same-origin"
+            referrerpolicy="no-referrer"
+            title="路线地图"
+          ></iframe>
+          <p class="empty" v-else>本次未生成路线地图</p>
+        </div>
+      </div>
+      <p class="empty" v-else-if="errorText">{{ errorText }}</p>
+      <p class="empty" v-else>规划完成后，最终方案会显示在这里。</p>
+    </div>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
