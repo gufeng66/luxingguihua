@@ -25,11 +25,32 @@ MAP_AGENT_PROMPT = """
 规则：
 1. 优先筛选 3 到 6 个最值得推荐的景点
 2. 输出时说明推荐理由
-3. 如果可以生成高德个人地图，优先生成
+3. 必须生成高德个人路线地图 HTML（用户明确说不要地图时除外；本任务已要求生成则不得跳过）
 4. 不要输出冗长原始 POI 数据
 5. 优先使用 amap-lbs-skill 提供的能力（阅读 /workspace/skills/amap-lbs-skill/SKILL.md 并按其指引调用 scripts）
-6. 路线地图 HTML 必须写到 /workspace/results/maps/{plan_id}.html，不要在正文里塞地图 URL
+6. 路线地图 HTML 必须写到 /workspace/results/maps/{plan_id}.html，写完再结束；不要在正文里塞地图 URL
 7. 不要读取 /workspace/skills 以外的项目文件；不要改写 skill
+8. 地图 HTML 必须遵守「amapTaskData 数据契约」（见下方），前端靠它拼高德预览链接
+
+地图 HTML 数据契约（必须全部满足）：
+- <body> 样式含 overscroll-behavior: contain（iframe 内滚轮不要传到外层页面）
+- 内嵌唯一数据源，禁止把 percent-encoding 后的完整 travel_plan URL 写进 HTML：
+  <script id="amapTaskData" type="application/json">[...]</script>
+- JSON 必须是数组，元素遵循 amap-lbs-skill 的 MapTaskData：
+  poi:  {"type":"poi","lnglat":[经度,纬度],"sort":"分类或日序","text":"点名","remark":"可选说明"}
+  route: {"type":"route","routeType":"walking|driving|riding|transfer","start":[经度,纬度],"end":[经度,纬度],"city":"城市（公交必填）","remark":"可选"}
+- 页面可保留：
+  <a id="amapOnline" href="#" target="_blank" rel="noopener">在高德在线地图打开</a>
+  <a id="amapApp" href="#" target="_blank" rel="noopener">在高德App看首站</a>
+  其 href 必须由页面 JS 在加载时从 #amapTaskData 读取后赋值，不要手写 iosamap:// / androidamap://（iframe 里会被拦截）：
+  var tasks = JSON.parse(document.getElementById('amapTaskData').textContent);
+  var base = 'https://a.amap.com/jsapi_demo_show/static/openclaw/travel_plan.html';
+  document.getElementById('amapOnline').href = base + '?data=' + encodeURIComponent(JSON.stringify(tasks));
+  var poi = tasks.find(function (x) { return x && x.type === 'poi' && x.lnglat; });
+  if (poi) {
+    document.getElementById('amapApp').href = 'https://uri.amap.com/marker?position=' + poi.lnglat[0] + ',' + poi.lnglat[1] + '&name=' + encodeURIComponent(poi.text || '首站') + '&src=travel-planner&coordinate=gaode&callnative=1';
+  }
+- 示意图 / Leaflet 底图也必须读同一份 #amapTaskData（或由其派生），不要另写一份互不同步的坐标表
 """
 
 # DeepAgents 子智能体配置（注意 skills 是虚拟路径，对应 CompositeBackend 挂载）

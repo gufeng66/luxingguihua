@@ -1,8 +1,11 @@
 <!--
   旅游规划多智能体 — 前端首页
 
-  结构在本文件；交互逻辑在 app.js（Vue3 CDN）。
-  启动后端后访问 http://127.0.0.1:8000/
+  结构在本文件；交互在 app.js（Vue3 CDN）。
+  启动：python -m uvicorn server:app --reload --host 127.0.0.1 --port 8000
+  然后打开 http://127.0.0.1:8000/
+
+  区块：顶栏状态 → 输入与演示剧本 → HITL 确认卡 → 左侧进度 / 右侧方案与地图
 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -17,17 +20,34 @@
 </head>
 <body>
   <div id="app">
-    <div class="page" :class="{ 'has-map': mapUrl }">
+    <header class="app-header">
       <h1 class="brand">旅游规划多智能体</h1>
-      <p class="subtitle">输入一句自然语言需求；缺关键信息时会弹出确认卡。过程按步骤展示，最终方案流式生成。</p>
+      <div class="status-badge" :class="statusBadgeClass" role="status">
+        <span class="status-spinner" v-if="loading" aria-hidden="true"></span>
+        <span class="status-dot" v-else aria-hidden="true"></span>
+        {{ statusLabel }}
+      </div>
+    </header>
 
-      <div class="panel">
+    <div class="page">
+      <div class="panel input-panel">
         <textarea v-model="query" maxlength="300" placeholder="例如：帮我规划下周六从杭州去苏州一日游，预算 800..." :disabled="awaitingClarify"></textarea>
+        <div class="demo-chips" aria-label="演示剧本">
+          <button
+            v-for="chip in demoChips"
+            :key="chip.id"
+            type="button"
+            class="chip"
+            :disabled="loading || awaitingClarify"
+            :title="chip.hint || chip.query"
+            @click="applyChip(chip)"
+          >{{ chip.label }}</button>
+        </div>
+        <p class="chip-hint" v-if="chipHint">{{ chipHint }}</p>
         <div class="actions">
           <button class="btn btn-primary" :disabled="!canSubmit" @click="startPlan">
             {{ loading ? "规划中..." : "开始规划" }}
           </button>
-          <button class="btn btn-ghost" :disabled="loading || awaitingClarify" @click="fillSample">填入示例</button>
           <span class="char-count">{{ queryLen }}/300</span>
         </div>
       </div>
@@ -52,62 +72,164 @@
         </div>
       </div>
 
-      <h2 class="section-title">执行过程</h2>
-      <div class="steps" v-if="steps.some(s => s.status !== 'pending') || loading || awaitingClarify">
-        <div
-          v-for="step in steps"
-          :key="step.id"
-          class="step-card"
-          :class="'status-' + step.status"
-        >
-          <div class="step-head">
-            <span class="step-spinner" v-if="step.status === 'active'" aria-hidden="true"></span>
-            <span class="step-mark" v-else-if="step.status === 'done'">✓</span>
-            <span class="step-mark muted" v-else-if="step.status === 'skipped'">—</span>
-            <span class="step-mark muted" v-else>○</span>
-            <strong>{{ step.label }}</strong>
-            <span class="step-status-text">{{
-              step.status === 'active' ? '进行中' :
-              step.status === 'done' ? '完成' :
-              step.status === 'skipped' ? '已跳过' : '等待'
-            }}</span>
-          </div>
-          <ul class="step-tools" v-if="step.tools.length">
-            <li v-for="(t, idx) in step.tools" :key="idx">
-              <details>
-                <summary>{{ t.name }}</summary>
-                <pre class="tool-params">{{ JSON.stringify(t.args, null, 2) }}</pre>
-                <pre v-if="t.result" class="tool-params">{{ t.result }}</pre>
-              </details>
-            </li>
-          </ul>
-        </div>
-      </div>
-      <p class="empty" v-else>尚未开始。点击「开始规划」后，这里会按步骤显示进度。</p>
+      <div class="workspace">
+        <aside class="process-col">
+          <div class="process-panel">
+            <button
+              type="button"
+              class="process-toggle"
+              :aria-expanded="processExpanded ? 'true' : 'false'"
+              @click="toggleProcess"
+            >
+              <span class="process-toggle-kicker">执行过程</span>
+              <span class="process-toggle-meta">{{ processSummary }}</span>
+            </button>
 
-      <h2 class="section-title">最终方案</h2>
-      <div class="result-actions" v-if="finalText">
-        <a v-if="savedUrl" class="btn btn-ghost" :href="savedUrl" download>下载本次方案</a>
-        <a v-if="traceUrl" class="btn btn-ghost" :href="traceUrl" target="_blank" rel="noopener">在 LangSmith 查看本次追踪</a>
+            <div class="process-body" v-show="processExpanded">
+              <div class="steps" v-if="steps.some(s => s.status !== 'pending') || loading || awaitingClarify">
+                <div
+                  v-for="step in steps"
+                  :key="step.id"
+                  class="step-card"
+                  :class="'status-' + step.status"
+                >
+                  <div class="step-head">
+                    <span class="step-spinner" v-if="step.status === 'active'" aria-hidden="true"></span>
+                    <span class="step-mark" v-else-if="step.status === 'done'">✓</span>
+                    <span class="step-mark muted" v-else-if="step.status === 'skipped'">—</span>
+                    <span class="step-mark muted" v-else>○</span>
+                    <strong>{{ step.label }}</strong>
+                    <span class="step-head-end">
+                      <span class="step-status-text">{{
+                        step.status === 'active' ? '进行中' :
+                        step.status === 'done' ? '完成' :
+                        step.status === 'skipped' ? '已跳过' : '等待'
+                      }}</span>
+                      <span class="step-meta" v-if="step.elapsedMs != null">{{ step.elapsedMs }}ms</span>
+                      <span class="step-meta" v-if="step.reason">{{ step.reason }}</span>
+                    </span>
+                  </div>
+                  <ul class="step-tools" v-if="step.tools.length">
+                    <li v-for="(t, idx) in step.tools" :key="idx">
+                      <details>
+                        <summary>{{ t.name }}</summary>
+                        <pre class="tool-params">{{ JSON.stringify(t.args, null, 2) }}</pre>
+                        <pre v-if="t.result" class="tool-params">{{ t.result }}</pre>
+                      </details>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+              <p class="empty" v-else>尚未开始。点击「开始规划」后，这里会按步骤显示进度。</p>
+            </div>
+
+            <p class="warning-banner" v-if="warningText">{{ warningText }}</p>
+          </div>
+        </aside>
+
+        <section class="result-col">
+          <div class="result-stage">
+            <div class="result-tabs" role="tablist">
+              <button
+                type="button"
+                class="tab-btn"
+                role="tab"
+                :class="{ 'is-active': resultTab === 'plan' }"
+                :aria-selected="resultTab === 'plan' ? 'true' : 'false'"
+                @click="resultTab = 'plan'"
+              >行程方案</button>
+              <button
+                type="button"
+                class="tab-btn"
+                role="tab"
+                :class="{ 'is-active': resultTab === 'map' }"
+                :aria-selected="resultTab === 'map' ? 'true' : 'false'"
+                @click="resultTab = 'map'"
+              >
+                路线地图
+                <span class="tab-dot" v-if="mapUrl" aria-label="已生成地图"></span>
+              </button>
+            </div>
+
+            <div class="result-card" v-show="resultTab === 'plan'">
+              <div class="result-card-head">
+                <div class="result-card-titles">
+                  <h2 class="section-title">最终方案</h2>
+                  <details class="timings timings-details" v-if="timings">
+                    <summary>耗时 {{ formatSeconds(timings.total_ms) }}s</summary>
+                    <p class="timings-breakdown">
+                      理解 {{ timings.understand_ms }} / MCP {{ timings.ticket_mcp_ms }} / 调度 {{ timings.dispatch_ms }} / 汇总 {{ timings.summary_ms }}{{ timings.parallel_dispatch ? ' · 同超步发出 map+ticket' : '' }}
+                    </p>
+                  </details>
+                </div>
+                <div class="result-actions" v-if="finalText">
+                  <button type="button" class="btn btn-ghost" @click="copyFinal">{{ copyLabel }}</button>
+                  <button v-if="mapUrl" type="button" class="btn btn-ghost" @click="downloadReport">下载</button>
+                  <a v-else-if="savedUrl" class="btn btn-ghost" :href="savedUrl" download>下载</a>
+                  <a v-if="traceUrl" class="btn btn-ghost" :href="traceUrl" target="_blank" rel="noopener">LangSmith</a>
+                </div>
+              </div>
+
+              <div
+                class="result-scroll"
+                ref="resultBody"
+                @scroll="onResultScroll"
+              >
+                <div class="result markdown-body" v-if="finalText" v-html="renderedHtml"></div>
+                <p class="empty" v-else-if="errorText">{{ errorText }}</p>
+                <div class="result-empty" v-else-if="loading">
+                  <span class="step-spinner" aria-hidden="true"></span>
+                  <p class="empty">正在生成方案，请稍候</p>
+                </div>
+                <div class="result-empty" v-else>
+                  <svg class="result-empty-icon" viewBox="0 0 64 64" aria-hidden="true">
+                    <rect x="6" y="10" width="52" height="44" rx="4" fill="none" stroke="currentColor" stroke-width="2"/>
+                    <path d="M14 22h36M14 32h24M14 42h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    <circle cx="46" cy="42" r="7" fill="none" stroke="currentColor" stroke-width="2"/>
+                    <path d="M46 39v4h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                  <p class="empty">输入需求并开始规划后，最终方案会显示在这里</p>
+                </div>
+              </div>
+
+              <div class="revise-tail" v-if="lastPlanId && !awaitingClarify">
+                <h2 class="section-title">修改方案</h2>
+                <textarea v-model="reviseQuery" maxlength="300" placeholder="例如：不要龙门石窟，改白马寺，路线顺一点" :disabled="loading"></textarea>
+                <div class="actions">
+                  <button class="btn btn-primary" :disabled="!reviseQuery.trim() || loading" @click="startRevise">提交修改</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="map-pane" ref="mapPane" v-show="resultTab === 'map'">
+              <div class="map-toolbar" v-if="mapUrl">
+                <button type="button" class="btn btn-ghost" @click="openAmapPreview">高德预览</button>
+                <button v-if="amapAppUrl" type="button" class="btn btn-ghost" @click="openAmapApp">高德App看首站</button>
+                <button type="button" class="btn btn-ghost" @click="toggleMapFullscreen">{{ mapFullscreen ? "退出全屏" : "全屏" }}</button>
+              </div>
+              <!--
+                地图 HTML 由模型生成，iframe 需要沙箱。
+                但「在高德在线地图打开」是 target=_blank，缺 allow-popups 时点击会被浏览器静默吃掉；
+                allow-popups-to-escape-sandbox 让弹出的高德页不要继承沙箱，否则高德脚本可能无法运行。
+              -->
+              <iframe
+                v-if="mapUrl"
+                class="map-frame"
+                ref="mapFrame"
+                :src="mapUrl"
+                sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+                referrerpolicy="no-referrer"
+                title="路线地图"
+                @load="onMapFrameLoad"
+              ></iframe>
+              <p class="empty" v-else>本次未生成路线地图</p>
+            </div>
+          </div>
+        </section>
       </div>
-      <div class="result-layout" v-if="finalText">
-        <div class="result markdown-body" v-html="renderedHtml"></div>
-        <div class="map-pane">
-          <iframe
-            v-if="mapUrl"
-            class="map-frame"
-            :src="mapUrl"
-            sandbox="allow-scripts allow-same-origin"
-            referrerpolicy="no-referrer"
-            title="路线地图"
-          ></iframe>
-          <p class="empty" v-else>本次未生成路线地图</p>
-        </div>
-      </div>
-      <p class="empty" v-else-if="errorText">{{ errorText }}</p>
-      <p class="empty" v-else>规划完成后，最终方案会显示在这里。</p>
     </div>
   </div>
+  <script src="/map.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

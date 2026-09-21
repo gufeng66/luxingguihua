@@ -32,8 +32,8 @@ from dotenv import find_dotenv, load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 # 跨域中间件：允许指定来源的前端访问 API
 from fastapi.middleware.cors import CORSMiddleware
-# 返回文件 / 返回流式响应
-from fastapi.responses import FileResponse, StreamingResponse
+# 返回流式响应
+from fastapi.responses import StreamingResponse
 # 把某个文件夹挂成 URL 前缀下的静态站点
 from fastapi.staticfiles import StaticFiles
 # 请求体校验模型
@@ -84,8 +84,8 @@ class PlanRequest(BaseModel):
 
     # 用户一句话需求（限制长度，防止超长刷爆模型）
     query: str = Field(..., min_length=1, max_length=300, description="自然语言旅游需求")
-    # 可选：用户在确认卡里改完后的槽位；有则跳过再次澄清
     slots: TravelSlots | None = Field(default=None, description="确认卡回传的已校验槽位")
+    plan_id: str | None = Field(default=None, description="修订时传入上一份方案的 UUID")
 
 
 @app.get("/api/health")
@@ -118,7 +118,12 @@ async def plan(req: PlanRequest, request: Request) -> StreamingResponse:
     async def event_source():
         """SSE 生成器：把业务事件编成 data: ... 帧。"""
         # 启动规划异步生成器（可带已确认 slots）
-        agen = stream_plan(query, cancel_event=cancel_event, slots=req.slots)
+        agen = stream_plan(
+            query,
+            cancel_event=cancel_event,
+            slots=req.slots,
+            parent_plan_id=req.plan_id,
+        )
         try:
             # watch_aiter：边取事件边检查取消/断连
             async for event in watch_aiter(agen, cancel_event=cancel_event, on_idle=on_idle):
@@ -142,28 +147,5 @@ async def plan(req: PlanRequest, request: Request) -> StreamingResponse:
     )
 
 
-@app.get("/")
-async def index() -> FileResponse:
-    """打开网站首页 = 返回 frontend/index.html。"""
-    index_path = FRONTEND_DIR / "index.html"
-    if not index_path.exists():
-        raise HTTPException(status_code=404, detail="frontend/index.html 不存在")
-    return FileResponse(index_path)
-
-
-@app.get("/app.js")
-async def frontend_js() -> FileResponse:
-    """前端逻辑脚本。"""
-    js_path = FRONTEND_DIR / "app.js"
-    if not js_path.exists():
-        raise HTTPException(status_code=404, detail="frontend/app.js 不存在")
-    return FileResponse(js_path, media_type="application/javascript")
-
-
-@app.get("/style.css")
-async def frontend_css() -> FileResponse:
-    """前端样式表。"""
-    css_path = FRONTEND_DIR / "style.css"
-    if not css_path.exists():
-        raise HTTPException(status_code=404, detail="frontend/style.css 不存在")
-    return FileResponse(css_path, media_type="text/css")
+# 必须在全部 API 与 /results 之后注册，避免吃掉 /api/*
+app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")

@@ -1,4 +1,11 @@
-"""主智能体与槽位抽取提示词。"""
+"""
+主智能体 / 槽位抽取用的系统提示。
+
+【小白怎么理解？】
+    MAIN_AGENT_PROMPT：槽位已确认时用。
+    MAIN_AGENT_PROMPT_LEGACY：抽取失败、没有结构化槽位时用（允许模型自己理解）。
+    build_main_prompt() 按「要不要票 / 要不要地图 / 是不是只改景点」往模板里填补丁。
+"""
 
 from __future__ import annotations
 
@@ -19,17 +26,14 @@ _SHARED_RULES = """
 规则：
 1. {rule_1}
 2. {rule_2}
-3. 景点、路线、地图相关问题交给 map_agent（通常都需要）
-4. 是否查票（12306 / ticket_agent）：
-   - 需要跨城铁路出行，且本次已挂载 ticket_agent：必须在同一轮对 map_agent 与 ticket_agent 各发起一次 task（一条消息里两个 tool call），禁止先等一个返回再调另一个
-   - 同城市内游，或用户明确自驾/地铁/公交/步行、不坐火车，或仅问景点路线未涉及城际铁路：不要调用 ticket_agent，不要走 12306；只调度 map_agent；禁止编造车次/票价
-   - 未挂载 ticket_agent（见下方补丁）：禁止调度 ticket_agent，禁止编造票务
-5. 本次用户明确表达的出行方式意图，优先于长期记忆/用户画像中的默认偏好（例如画像写「偏爱自驾」，但用户本次说「坐高铁去」，必须查票）
-6. 不要调用 summary_agent；成文由系统完成
-7. 调度完所需子智能体后，只输出一句简短状态（例如「已完成查票与景点检索」或「未查票（无需铁路），已完成景点检索」），不要输出完整旅行方案长文
-8. 输出必须使用中文
-9. 不做真实购票，只做规划和建议
+3. {map_rule}
+4. {rail_rule}
+5. 不要调用 summary_agent；成文由系统完成
+6. 调度完所需子智能体后，只输出一句简短状态（例如「已完成查票与景点检索」或「未查票（无需铁路），已完成景点检索」），不要输出完整旅行方案长文
+7. 输出必须使用中文
+8. 不做真实购票，只做规划和建议
 {ticket_patch}
+{map_patch}
 {slots_block}
 """.strip()
 
@@ -53,8 +57,28 @@ MAIN_AGENT_PROMPT_LEGACY = f"""
 {_SHARED_RULES}
 """.strip()
 
+NEED_MAP_PATCH = """
+用户未声明不要地图：必须调用 map_agent，且必须把路线地图 HTML 写到 /workspace/results/maps/{plan_id}.html（不是「可以的话再生成」）。地图 HTML 必须内嵌 <script id="amapTaskData" type="application/json"> 数组，由页面 JS 运行时构造 #amapOnline 链接，不要手写 percent-encoding 的完整 URL。
+"""
+
+NO_MAP_PATCH = """
+用户明确不要路线地图：不要调用 map_agent，不要生成地图 HTML。
+"""
+
+NEED_RAIL_PATCH = """
+本次路由判定需要铁路（跨城或用户明确要坐火车/高铁）。已挂载 ticket_agent，必须在同一轮对 map_agent 与 ticket_agent 各发起一次 task（一条消息里两个 tool call），禁止先等一个返回再调另一个。
+"""
+
+NO_RAIL_PATCH = """
+本次路由判定无需铁路（{reason}）。不要调用 ticket_agent，不要走 12306；只调度 map_agent；禁止编造车次/票价。
+"""
+
 TICKET_UNAVAILABLE_PATCH = """
 车票服务不可用，不要调度 ticket_agent；后续汇总只整合地图结果，禁止编造车次/票价。
+"""
+
+REVISION_MAP_PATCH = """
+本次为方案修订：落实用户点名的增删景点与路线调整；未改的约束（排除目的地、预算、天数）保持不变。不要调度 ticket_agent。
 """
 
 SLOT_EXTRACT_PROMPT = """你是旅行需求槽位抽取器。今天是 {today}，星期{weekday}。
@@ -67,20 +91,58 @@ SLOT_EXTRACT_PROMPT = """你是旅行需求槽位抽取器。今天是 {today}�
 """
 
 
+def _rail_reason_text(skip_reason: str | None) -> str:
+    """把内部 reason 码翻成提示词里的人话。"""
+    if skip_reason == "intra_city":
+        return "同城"
+    if skip_reason == "no_rail_intent":
+        return "用户明确自驾/租车/航空/不坐火车"
+    return "无需铁路"
+
+
 def build_main_prompt(
     *,
     ticket_available: bool,
     plan_id: str,
     slots: TravelSlots | None = None,
     legacy: bool = False,
+    need_ticket: bool = True,
+    skip_reason: str | None = None,
+    revision_map_only: bool = False,
+    need_map: bool = True,
 ) -> str:
+    """按本次路由结果拼主智能体 system prompt（含日期、槽位约束、票/图补丁）。"""
     now = datetime.now()
-    ticket_patch = "" if ticket_available else TICKET_UNAVAILABLE_PATCH
+    if need_map:
+        map_patch = NEED_MAP_PATCH.format(plan_id=plan_id)
+        map_rule = "必须调度 map_agent，并生成路线地图 HTML。"
+    else:
+        map_patch = NO_MAP_PATCH
+        map_rule = "用户不要路线地图：禁止调用 map_agent。"
+    if revision_map_only:
+        ticket_patch = REVISION_MAP_PATCH
+        rail_rule = "修订模式：只调度 map_agent，禁止查票与编造车次。"
+    elif not need_ticket:
+        ticket_patch = NO_RAIL_PATCH.format(reason=_rail_reason_text(skip_reason))
+        rail_rule = "路由已判定无需铁路，禁止调用 ticket_agent。"
+    elif ticket_available:
+        if need_map:
+            ticket_patch = NEED_RAIL_PATCH
+            rail_rule = "路由已判定需要铁路：必须同轮并行调度 map_agent 与 ticket_agent。"
+        else:
+            ticket_patch = "必须调度 ticket_agent 查票。用户不要路线地图，禁止调用 map_agent。\n"
+            rail_rule = "需要铁路查票，但不要调度 map_agent。"
+    else:
+        ticket_patch = TICKET_UNAVAILABLE_PATCH
+        rail_rule = "车票服务不可用：禁止调度 ticket_agent，禁止编造票务。"
     common = {
         "today": now.strftime("%Y-%m-%d"),
         "weekday": WEEKDAYS[now.weekday()],
         "ticket_patch": ticket_patch,
+        "map_patch": map_patch,
+        "map_rule": map_rule,
         "plan_id": plan_id,
+        "rail_rule": rail_rule,
     }
     if legacy or slots is None:
         return MAIN_AGENT_PROMPT_LEGACY.format(

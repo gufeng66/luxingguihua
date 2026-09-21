@@ -1,4 +1,11 @@
-"""智能体虚拟文件系统：results/config 可写，skill 只读。"""
+"""
+智能体看到的「虚拟硬盘」
+
+【小白怎么理解？】
+    模型读写的是 /workspace/results/… 这种 Unix 风格路径，不是 Windows 盘符。
+    CompositeBackend 把前缀映射到真实文件夹；高德 Skill 再包一层 ReadOnlyBackend，
+    防止模型改写 skill 脚本。
+"""
 
 from __future__ import annotations
 

@@ -157,7 +157,11 @@ def collect_slots_interactively(event: dict) -> TravelSlots:
     return filled
 
 
-async def run_once(query: str, slots: TravelSlots | None = None) -> dict | None:
+async def run_once(
+    query: str,
+    slots: TravelSlots | None = None,
+    parent_plan_id: str | None = None,
+) -> dict | None:
     """跑一轮规划流水线，并把各类事件打印到控制台。
 
     返回值：
@@ -165,19 +169,22 @@ async def run_once(query: str, slots: TravelSlots | None = None) -> dict | None:
         - 若正常跑完或出错：返回 None
     """
     # 最终方案正文（收到 final 事件时赋值）
+    final_event: dict | None = None
     final_answer = None
-    # 若需要澄清，把事件存这里
     clarify_event: dict | None = None
-    # 异步迭代规划事件（SSE 网页版消费的是同一套事件）
-    async for event in stream_plan(query, slots=slots):
+    async for event in stream_plan(query, slots=slots, parent_plan_id=parent_plan_id):
         # 事件类型：status / step / clarify / token / final ...
         etype = event.get("type")
         if etype == "status":
             # 人类可读的阶段说明
             print(f"[状态]:{event.get('message')}")
         elif etype == "step":
-            # 进度条用的步骤：understand / ticket / map / summary
-            print(f"[步骤]:{event.get('id')} -> {event.get('status')}")
+            extra = ""
+            if event.get("reason"):
+                extra += f" reason={event.get('reason')}"
+            if event.get("elapsed_ms") is not None:
+                extra += f" {event.get('elapsed_ms')}ms"
+            print(f"[步骤]:{event.get('id')} -> {event.get('status')}{extra}")
         elif etype == "slots":
             # 系统抽取出的槽位快照
             print(f"[槽位]:{event.get('slots')}")
@@ -198,22 +205,27 @@ async def run_once(query: str, slots: TravelSlots | None = None) -> dict | None:
                 content = content[:200] + "..."
             print(f"[模型]:{content}")
         elif etype == "tool_result":
-            # 工具/子智能体返回摘要（服务层可能已截断）
             print(f"[执行工具返回结果]:{event.get('content')}")
+        elif etype == "warning":
+            print(f"[警告]:{event.get('message')}")
         elif etype == "token":
             # 汇总阶段的逐字流式输出：不换行，边到边打
             print(event.get("content") or "", end="", flush=True)
         elif etype == "final":
             # 全部完成：换行后打印落盘/地图/追踪链接
             print()
+            final_event = event
             final_answer = event.get("content")
             saved_url = event.get("saved_url")
             map_url = event.get("map_url")
             trace_url = event.get("trace_url")
+            timings = event.get("timings")
             if saved_url:
                 print(f"[落盘]:{saved_url}")
             if map_url:
                 print(f"[地图]:{map_url}")
+            if timings:
+                print(f"[耗时]:{timings}")
             if trace_url:
                 print(f"[LangSmith]:{trace_url}")
             elif os.getenv("LANGSMITH_API_KEY"):
@@ -231,21 +243,28 @@ async def run_once(query: str, slots: TravelSlots | None = None) -> dict | None:
     # 正常结束：打印最终方案
     print("\n========== 最终结果 ==========\n")
     print(final_answer or "本次没有生成最终结果")
-    return None
+    return final_event
 
 
 async def main(argv: list[str] | None = None) -> None:
-    """控制台总流程：先跑一轮；若要澄清则补槽后再跑一轮。"""
-    # 拿到用户一句话需求
+    """入口：先规划；若要澄清则终端补槽再跑；完成后可循环输入修订意见。"""
     query = parse_query(argv if argv is not None else sys.argv[1:])
     print("\n========== 开始规划 ==========\n")
-    # 第一轮：不带已确认槽位，让系统自己抽
     pending = await run_once(query, slots=None)
-    # 若返回 clarify：交互补全后再带 slots 重跑
     if pending is not None and pending.get("type") == "clarify":
         confirmed = collect_slots_interactively(pending)
         print("\n========== 确认后继续 ==========\n")
-        await run_once(query, slots=confirmed)
+        pending = await run_once(query, slots=confirmed)
+    while pending is not None and pending.get("type") == "final" and pending.get("plan_id"):
+        try:
+            revision = input("\n输入修改意见（直接回车结束）：").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n已结束。")
+            return
+        if not revision:
+            return
+        print("\n========== 修订方案 ==========\n")
+        pending = await run_once(revision, parent_plan_id=str(pending.get("plan_id")))
 
 
 # 只有「直接 python app.py」时才启动；被 import 时不自动跑

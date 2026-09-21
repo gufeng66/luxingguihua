@@ -100,7 +100,7 @@ cp .env.example .env
 
 也可把高德 Key 写入 `amap-lbs-skill/config.json`（由 `config.example.json` 复制），该文件已被 gitignore。
 
-12306 MCP 使用公开的 ModelScope Streamable HTTP 地址，一般无需额外 Key（见 `ticket_sub_agent.py`）。
+12306 MCP 默认使用公开的 ModelScope 地址，可用环境变量 `MCP_12306_URL` 覆盖（见 `ticket_sub_agent.py`）。
 
 ### 4. 启动
 
@@ -115,14 +115,34 @@ python -m uvicorn server:app --reload --host 127.0.0.1 --port 8000
 **CLI：**
 
 ```bash
-python app.py "帮我规划下周六从杭州去苏州一日游，预算 800，想看园林和老街，尽量少折腾"
+python app.py "这周六从新乡坐高铁去郑州一日游，预算 500，少折腾"
 python app.py   # 交互输入
 ```
 
 规划结果示例路径：
 
 - `workspace/results/旅游规划-YYYY-MM-DD-HHMMSS.md`
-- `workspace/results/maps/{plan_id}.html`（若生成了地图）
+- `workspace/results/maps/{plan_id}.html`（用户未声明不要地图时必须生成）
+
+---
+
+## 演示
+
+现场建议固定跑这几条（出发地/出行方式都写在用户话里，不依赖画像）。Web 首页 chips 与下列剧本一一对应，可一键填入。
+
+1. **跨城高铁（并行）**：`这周六从新乡坐高铁去郑州一日游，预算 500，少折腾` — 看 map 与 ticket 同超步发出。
+2. **省内租电车自驾**：`下周从新乡租电车自驾去洛阳两天，轻松点，别安排开封和宝泉` — ticket `skipped`，方案考虑续航/充电。
+3. **HITL**：`周末去郑州玩` — 缺出发地或日期时弹出确认卡。
+4. **MCP 降级**：把 `.env` 里 `MCP_12306_URL` 改成无效地址后重跑跨城高铁 — `unavailable`，车票节说明服务不可用且不编车次。
+5. **修订**：在第 2 条完成后提交「不要龙门石窟，改白马寺，路线顺一点」— 不重查票。
+
+杭州→苏州可作为跨省对照。
+
+### 耗时预算
+
+`DISPATCH_TIMEOUT_SECONDS`（默认 180）**只覆盖**主智能体 `astream`，不含 MCP 连接。MCP 最坏约 15s × 2 次重试；TTL 300s 内第二次规划会命中车票工具缓存（`ticket_cache_hit`）。最坏总时长 ≈ MCP + 180 + 汇总生成。并行只自证「同超步发出两个 task」，不承诺总耗时减半。路线地图：用户未说「不要地图」时必须生成 HTML；调度超时不再误报成「未调度 map_agent」。
+
+快照在 `workspace/results/snapshots/`（已 gitignore）。**不做自动 LRU**；目录膨胀时本地手动清理即可。
 
 ---
 
@@ -135,7 +155,8 @@ python app.py   # 交互输入
 ```json
 {
   "query": "自然语言需求",
-  "slots": null
+  "slots": null,
+  "plan_id": null
 }
 ```
 
@@ -146,13 +167,14 @@ python app.py   # 交互输入
 | `status` | `message` | 进度文案 / 抽取失败降级提示 |
 | `slots` | `slots` | 抽取或已确认的槽位 |
 | `clarify` | `slots`, `missing`, `defaults_applied`, `message` | 等人确认（仅 critical 缺失） |
-| `step` | `id`, `status` | `understand` / `ticket` / `map` / `summary`；状态 `pending`/`active`/`done`/`skipped` |
+| `step` | `id`, `status`, `elapsed_ms?`, `reason?`, `label?` | `understand` / `ticket` / `map` / `summary`；`skipped` 不带 `elapsed_ms`；`reason` 如 `no_rail_intent` / `mcp_unavailable` / `not_dispatched` |
+| `warning` | `code`, `message` | 漏调度 map/ticket 等护栏 |
+| `final` | `content`, `saved_url`, `plan_id`, `timings`, `map_url?`, `trace_url?` | 完整方案、耗时与产物链接 |
 | `subagent` | `name` | 调度的子智能体 |
 | `tool` | `name`, `args` | 工具调用 |
 | `tool_result` | `content` | 工具返回（已截断） |
 | `model` | `content` | 主模型短状态文本 |
 | `token` | `content` | summary 增量文本 |
-| `final` | `content`, `saved_url`, `plan_id`, `map_url?`, `trace_url?` | 完整方案与产物链接 |
 | `error` | `message` | 失败 |
 
 其它 HTTP：
@@ -175,6 +197,7 @@ python app.py   # 交互输入
 │   ├── backends.py         # 虚拟文件系统（skill 只读）
 │   ├── prompts.py          # 主智能体提示词
 │   ├── llm.py              # 模型初始化与槽位抽取
+│   ├── routing.py          # 查票路由与票务五态
 │   ├── ticket_cache.py     # 车票 MCP TTL 缓存与三态
 │   ├── async_utils.py      # 可取消异步迭代
 │   ├── summary.py          # 汇总成文与落盘
@@ -191,6 +214,7 @@ python app.py   # 交互输入
 ├── summary_sub_agent.py    # 汇总提示词
 ├── amap-lbs-skill/         # 高德地图 Skill（Node）
 ├── evals/                  # 单元 / 集成评测
+├── reference/travel_agent/ # 参考实现，非运行路径
 ├── workspace/
 │   ├── config/memory/      # 智能体长期记忆
 │   └── results/maps/       # 运行产物（git 忽略内容）
@@ -200,13 +224,15 @@ python app.py   # 交互输入
 └── README.md
 ```
 
+`reference/travel_agent/` 是早期样板，**参考实现，非运行路径**。运行入口仍是 `server.py` / `app.py` 与根目录 `amap-lbs-skill/`。
+
 ---
 
 ## 评测
 
 ```bash
-# 默认：纯函数 + mock，无网络，适合 CI
-pytest evals/test_unit.py -q
+# 默认 CI：纯函数 + mock，无网络
+pytest -q -m "not integration"
 
 # 集成：需 .env 中 DeepSeek Key
 pytest -m integration evals/test_integration.py -q
@@ -217,11 +243,11 @@ pytest -m integration evals/test_integration.py -q
 - critical / soft 分级与 `should_clarify`
 - 相对日期换算（可注入 `today=`）
 - `TravelSlots` 校验
-- 方案六章节结构、禁止编造车次
-- 票务三态（`unavailable` / `not_needed` / `ok`）
-- `stream_plan` 并行调度与自驾跳过查票（mock）
+- 方案六章节结构；无票时「车票建议」禁车次
+- 票务五态（`ok` / `skipped` / `unavailable` / `missed` / `timeout`）与路由注入
+- `stream_plan` 并行调度、自驾跳过查票、修订 map_only（mock）
 
-详见 [`evals/README.md`](evals/README.md)。
+口径见 [`evals/cases.md`](evals/cases.md)。
 
 ---
 
@@ -242,10 +268,12 @@ LANGSMITH_PROJECT=travel-planner
 ## 设计要点与降级策略
 
 1. **车票不可用**：MCP 超时或失败 → 跳过 `ticket_agent`，方案中如实说明，不编造车次
-2. **无需铁路**：同城游 / 明确自驾地铁等 → `ticket` 步骤 `skipped`，文案为「未查票（无需铁路）」
-3. **槽位抽取失败**：退回 legacy 提示词，仍尽量完成规划
-4. **客户端断开**：Web SSE 通过 `cancel_event` 尽快停止后续 LLM 调用，节省费用
-5. **Skill 只读**：高德目录经 `ReadOnlyBackend` 挂载，防止智能体改写脚本
+2. **无需铁路**：同城游 / 明确自驾地铁航空等 → `ticket` 步骤 `skipped`（`reason=no_rail_intent` 或 `intra_city`），文案为「未查票（无需铁路）」
+3. **本应查票未调度**：`missed` + SSE `warning`，汇总禁止编造
+4. **槽位抽取失败**：退回 legacy 提示词，仍尽量完成规划
+5. **客户端断开**：Web SSE 通过 `cancel_event` 尽快停止后续 LLM 调用，节省费用
+6. **调度超时**：`watch_aiter` 超时后 `aclose` 生成器，用已有结果汇总
+7. **Skill 只读**：高德目录经 `ReadOnlyBackend` 挂载，防止智能体改写脚本
 
 ---
 

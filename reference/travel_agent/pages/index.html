@@ -1,0 +1,1108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智行 · 企业级智能旅游规划平台</title>
+<style>
+    :root {
+        --bg: #070b16;
+        --bg-soft: #0c1222;
+        --panel: rgba(18, 26, 45, 0.72);
+        --panel-solid: #111a2e;
+        --line: rgba(148, 172, 220, 0.14);
+        --line-strong: rgba(148, 172, 220, 0.28);
+        --text: #e8eefc;
+        --text-sub: #94a3bd;
+        --text-dim: #64748b;
+        --gold: #d4af6a;
+        --gold-soft: #f0d9a8;
+        --accent: #4a7dff;
+        --accent-soft: #7ba3ff;
+        --ok: #34d399;
+        --err: #f87171;
+        --radius: 14px;
+        --shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.75);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "Segoe UI", system-ui, sans-serif;
+        font-size: 15px;
+        line-height: 1.75;
+        -webkit-font-smoothing: antialiased;
+        overflow-x: hidden;
+    }
+
+    /* ============ 背景装饰 ============ */
+    .bg-decor {
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        overflow: hidden;
+    }
+    .bg-decor::before,
+    .bg-decor::after {
+        content: "";
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(120px);
+        opacity: 0.5;
+    }
+    .bg-decor::before {
+        width: 720px; height: 720px;
+        top: -300px; left: -180px;
+        background: radial-gradient(circle, rgba(74, 125, 255, 0.42), transparent 70%);
+    }
+    .bg-decor::after {
+        width: 640px; height: 640px;
+        top: 120px; right: -220px;
+        background: radial-gradient(circle, rgba(212, 175, 106, 0.24), transparent 70%);
+    }
+    .grid-mask {
+        position: absolute;
+        inset: 0;
+        background-image:
+            linear-gradient(rgba(148, 172, 220, 0.045) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(148, 172, 220, 0.045) 1px, transparent 1px);
+        background-size: 62px 62px;
+        mask-image: radial-gradient(ellipse 90% 62% at 50% 0%, #000 40%, transparent 100%);
+        -webkit-mask-image: radial-gradient(ellipse 90% 62% at 50% 0%, #000 40%, transparent 100%);
+    }
+
+    .wrap { position: relative; z-index: 1; }
+    .container { width: min(1180px, calc(100% - 48px)); margin: 0 auto; }
+
+    /* ============ 顶栏 ============ */
+    header.topbar {
+        position: sticky;
+        top: 0;
+        z-index: 50;
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+        background: rgba(7, 11, 22, 0.72);
+        border-bottom: 1px solid var(--line);
+    }
+    .topbar-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 70px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-mark {
+        width: 38px; height: 38px;
+        border-radius: 10px;
+        background: linear-gradient(140deg, var(--accent), #2b48a8 60%, var(--gold));
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+        font-size: 17px;
+        letter-spacing: -0.5px;
+        box-shadow: 0 8px 22px -8px rgba(74, 125, 255, 0.8);
+    }
+    .brand-text { display: flex; flex-direction: column; line-height: 1.25; }
+    .brand-text b { font-size: 16px; letter-spacing: 3px; font-weight: 600; }
+    .brand-text span { font-size: 11px; color: var(--text-dim); letter-spacing: 1.6px; text-transform: uppercase; }
+
+    nav.links { display: flex; align-items: center; gap: 34px; }
+    nav.links a {
+        color: var(--text-sub);
+        text-decoration: none;
+        font-size: 14px;
+        transition: color 0.2s;
+    }
+    nav.links a:hover { color: var(--text); }
+
+    .status-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 15px;
+        border: 1px solid var(--line-strong);
+        border-radius: 999px;
+        font-size: 12px;
+        color: var(--text-sub);
+        letter-spacing: 0.4px;
+    }
+    .dot {
+        width: 7px; height: 7px;
+        border-radius: 50%;
+        background: var(--ok);
+        box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.16);
+        animation: pulse 2.4s ease-in-out infinite;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.35; }
+    }
+
+    /* ============ Hero ============ */
+    .hero { padding: 92px 0 20px; text-align: center; }
+    .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 7px 18px;
+        border: 1px solid rgba(212, 175, 106, 0.34);
+        border-radius: 999px;
+        background: rgba(212, 175, 106, 0.06);
+        color: var(--gold-soft);
+        font-size: 12px;
+        letter-spacing: 2px;
+        margin-bottom: 30px;
+    }
+    .hero h1 {
+        font-size: clamp(34px, 5.2vw, 60px);
+        line-height: 1.2;
+        font-weight: 700;
+        letter-spacing: -1px;
+        margin-bottom: 24px;
+    }
+    .hero h1 .grad {
+        background: linear-gradient(100deg, var(--gold-soft), var(--gold) 45%, var(--accent-soft));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+    }
+    .hero p.lead {
+        max-width: 680px;
+        margin: 0 auto 46px;
+        color: var(--text-sub);
+        font-size: 16px;
+    }
+
+    /* ============ 咨询台 ============ */
+    .console {
+        background: var(--panel);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid var(--line-strong);
+        border-radius: 20px;
+        box-shadow: var(--shadow);
+        padding: 30px;
+        text-align: left;
+    }
+    .console-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding-bottom: 20px;
+        margin-bottom: 22px;
+        border-bottom: 1px solid var(--line);
+    }
+    .console-title { display: flex; align-items: center; gap: 11px; font-size: 15px; font-weight: 600; }
+    .console-title svg { color: var(--gold); }
+    .console-sub { font-size: 12px; color: var(--text-dim); }
+
+    .field { position: relative; }
+    textarea#query {
+        width: 100%;
+        min-height: 118px;
+        resize: vertical;
+        padding: 18px 20px;
+        border-radius: var(--radius);
+        border: 1px solid var(--line-strong);
+        background: rgba(7, 11, 22, 0.62);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 15px;
+        line-height: 1.8;
+        outline: none;
+        transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    textarea#query::placeholder { color: var(--text-dim); }
+    textarea#query:focus {
+        border-color: rgba(74, 125, 255, 0.6);
+        box-shadow: 0 0 0 4px rgba(74, 125, 255, 0.12);
+    }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 22px; }
+    .chip {
+        padding: 8px 15px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(148, 172, 220, 0.05);
+        color: var(--text-sub);
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.18s;
+        font-family: inherit;
+    }
+    .chip:hover {
+        color: var(--text);
+        border-color: rgba(212, 175, 106, 0.46);
+        background: rgba(212, 175, 106, 0.09);
+        transform: translateY(-1px);
+    }
+
+    .console-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        flex-wrap: wrap;
+    }
+    .hint { font-size: 12px; color: var(--text-dim); }
+    .hint kbd {
+        padding: 2px 7px;
+        border: 1px solid var(--line-strong);
+        border-radius: 5px;
+        background: rgba(148, 172, 220, 0.08);
+        font-size: 11px;
+        font-family: ui-monospace, Consolas, monospace;
+    }
+
+    .btn-group { display: flex; gap: 12px; }
+    button.btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        padding: 13px 30px;
+        border: none;
+        border-radius: 11px;
+        font-size: 14.5px;
+        font-weight: 600;
+        font-family: inherit;
+        cursor: pointer;
+        transition: transform 0.18s, box-shadow 0.18s, opacity 0.18s;
+    }
+    button.btn-primary {
+        color: #08122b;
+        background: linear-gradient(120deg, var(--gold-soft), var(--gold));
+        box-shadow: 0 14px 30px -12px rgba(212, 175, 106, 0.7);
+    }
+    button.btn-primary:hover:not(:disabled) { transform: translateY(-2px); }
+    button.btn-primary:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
+    button.btn-ghost {
+        color: var(--text-sub);
+        background: transparent;
+        border: 1px solid var(--line-strong);
+    }
+    button.btn-ghost:hover { color: var(--text); border-color: var(--line-strong); background: rgba(148, 172, 220, 0.06); }
+
+    .spinner {
+        width: 15px; height: 15px;
+        border: 2px solid rgba(8, 18, 43, 0.28);
+        border-top-color: #08122b;
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ============ 结果区 ============ */
+    section#result-zone { margin-top: 30px; display: none; }
+    section#result-zone.show { display: block; animation: rise 0.45s ease both; }
+    @keyframes rise {
+        from { opacity: 0; transform: translateY(16px); }
+        to { opacity: 1; transform: none; }
+    }
+
+    .result-card {
+        background: var(--panel-solid);
+        border: 1px solid var(--line-strong);
+        border-radius: 20px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+    }
+    .result-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 20px 28px;
+        border-bottom: 1px solid var(--line);
+        background: linear-gradient(180deg, rgba(74, 125, 255, 0.07), transparent);
+    }
+    .result-head h3 { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+    .badge {
+        padding: 4px 11px;
+        border-radius: 6px;
+        font-size: 11px;
+        letter-spacing: 0.6px;
+        border: 1px solid var(--line-strong);
+        color: var(--text-sub);
+    }
+    .badge.ok { color: var(--ok); border-color: rgba(52, 211, 153, 0.34); background: rgba(52, 211, 153, 0.08); }
+    .badge.err { color: var(--err); border-color: rgba(248, 113, 113, 0.34); background: rgba(248, 113, 113, 0.08); }
+
+    .result-body { padding: 26px 30px 32px; }
+
+    /* 骨架屏 */
+    .skeleton .sk-line {
+        height: 13px;
+        border-radius: 6px;
+        background: linear-gradient(90deg, rgba(148, 172, 220, 0.07), rgba(148, 172, 220, 0.16), rgba(148, 172, 220, 0.07));
+        background-size: 220% 100%;
+        animation: shimmer 1.4s linear infinite;
+        margin-bottom: 14px;
+    }
+    @keyframes shimmer {
+        from { background-position: 180% 0; }
+        to { background-position: -80% 0; }
+    }
+    .sk-steps { display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px; }
+    .sk-step { display: flex; align-items: center; gap: 12px; font-size: 13.5px; color: var(--text-dim); }
+    .sk-step .ring {
+        width: 16px; height: 16px;
+        border-radius: 50%;
+        border: 2px solid rgba(148, 172, 220, 0.22);
+        border-top-color: var(--accent);
+        animation: spin 0.9s linear infinite;
+        flex: none;
+    }
+    .sk-step.done { color: var(--text-sub); }
+    .sk-step.done .ring {
+        border: none;
+        animation: none;
+        background: rgba(52, 211, 153, 0.16);
+        color: var(--ok);
+        display: grid;
+        place-items: center;
+        font-size: 10px;
+    }
+
+    /* Markdown 输出 */
+    .md h1, .md h2, .md h3 {
+        margin: 28px 0 12px;
+        font-weight: 650;
+        line-height: 1.4;
+    }
+    .md h1 { font-size: 21px; }
+    .md h2 {
+        font-size: 18px;
+        padding-left: 12px;
+        border-left: 3px solid var(--gold);
+    }
+    .md h3 { font-size: 16px; color: var(--gold-soft); }
+    .md > *:first-child { margin-top: 0; }
+    .md p { margin: 12px 0; color: #d3ddf2; }
+    .md ul, .md ol { margin: 12px 0 12px 22px; }
+    .md li { margin: 7px 0; color: #d3ddf2; }
+    .md li::marker { color: var(--gold); }
+    .md strong { color: #fff; font-weight: 650; }
+    .md code {
+        padding: 2px 7px;
+        border-radius: 5px;
+        background: rgba(148, 172, 220, 0.12);
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 13px;
+        color: var(--gold-soft);
+    }
+    .md a { color: var(--accent-soft); text-decoration: none; border-bottom: 1px dashed rgba(123, 163, 255, 0.5); }
+    .md a:hover { color: #fff; }
+    .md hr { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
+    .md blockquote {
+        margin: 16px 0;
+        padding: 12px 18px;
+        border-left: 3px solid var(--accent);
+        background: rgba(74, 125, 255, 0.07);
+        border-radius: 0 10px 10px 0;
+        color: var(--text-sub);
+    }
+    .md table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 18px 0;
+        font-size: 14px;
+    }
+    .md th, .md td { padding: 11px 14px; border: 1px solid var(--line); text-align: left; }
+    .md th { background: rgba(148, 172, 220, 0.07); color: var(--gold-soft); font-weight: 600; }
+
+    .err-box {
+        display: flex;
+        gap: 14px;
+        padding: 18px 20px;
+        border: 1px solid rgba(248, 113, 113, 0.3);
+        background: rgba(248, 113, 113, 0.07);
+        border-radius: var(--radius);
+        color: #fecaca;
+        font-size: 14px;
+    }
+    .err-box b { color: #fff; display: block; margin-bottom: 4px; }
+
+    .result-actions { display: flex; gap: 10px; }
+    .icon-btn {
+        width: 34px; height: 34px;
+        display: grid; place-items: center;
+        border: 1px solid var(--line-strong);
+        border-radius: 9px;
+        background: transparent;
+        color: var(--text-sub);
+        cursor: pointer;
+        transition: all 0.18s;
+    }
+    .icon-btn:hover { color: var(--text); background: rgba(148, 172, 220, 0.08); }
+    .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .icon-btn:disabled:hover { color: var(--text-sub); background: transparent; }
+
+    /* ============ 能力矩阵 ============ */
+    .section { padding: 100px 0 0; }
+    .section-head { text-align: center; margin-bottom: 48px; }
+    .section-head span {
+        font-size: 12px;
+        letter-spacing: 3px;
+        color: var(--gold);
+        text-transform: uppercase;
+    }
+    .section-head h2 { font-size: clamp(24px, 3vw, 34px); margin-top: 12px; font-weight: 650; letter-spacing: -0.5px; }
+    .section-head p { color: var(--text-sub); margin-top: 12px; }
+
+    .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); gap: 20px; }
+    .card {
+        position: relative;
+        padding: 30px 26px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: linear-gradient(165deg, rgba(18, 26, 45, 0.85), rgba(12, 18, 34, 0.6));
+        transition: transform 0.25s, border-color 0.25s, box-shadow 0.25s;
+        overflow: hidden;
+    }
+    .card::after {
+        content: "";
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(212, 175, 106, 0.65), transparent);
+        opacity: 0;
+        transition: opacity 0.25s;
+    }
+    .card:hover {
+        transform: translateY(-5px);
+        border-color: var(--line-strong);
+        box-shadow: 0 26px 50px -26px rgba(0, 0, 0, 0.9);
+    }
+    .card:hover::after { opacity: 1; }
+    .card .ico {
+        width: 46px; height: 46px;
+        border-radius: 12px;
+        display: grid; place-items: center;
+        background: rgba(74, 125, 255, 0.12);
+        border: 1px solid rgba(74, 125, 255, 0.24);
+        color: var(--accent-soft);
+        margin-bottom: 20px;
+    }
+    .card:nth-child(2) .ico { background: rgba(212, 175, 106, 0.12); border-color: rgba(212, 175, 106, 0.26); color: var(--gold-soft); }
+    .card:nth-child(3) .ico { background: rgba(52, 211, 153, 0.12); border-color: rgba(52, 211, 153, 0.26); color: var(--ok); }
+    .card h4 { font-size: 16.5px; font-weight: 650; margin-bottom: 10px; }
+    .card p { color: var(--text-sub); font-size: 14px; }
+    .card .tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
+    .card .tags i {
+        font-style: normal;
+        font-size: 11.5px;
+        padding: 3px 9px;
+        border-radius: 5px;
+        background: rgba(148, 172, 220, 0.08);
+        color: var(--text-dim);
+    }
+
+    /* ============ 流程 ============ */
+    .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 18px; }
+    .step {
+        padding: 26px 22px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: rgba(12, 18, 34, 0.55);
+    }
+    .step em {
+        font-style: normal;
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 28px;
+        font-weight: 700;
+        background: linear-gradient(140deg, var(--gold-soft), rgba(212, 175, 106, 0.25));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+    }
+    .step h5 { font-size: 15px; margin: 10px 0 8px; font-weight: 620; }
+    .step p { font-size: 13.5px; color: var(--text-sub); }
+
+    /* ============ 数据条 ============ */
+    .stats {
+        margin-top: 100px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 1px;
+        background: var(--line);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        overflow: hidden;
+    }
+    .stat { padding: 32px 24px; text-align: center; background: var(--bg-soft); }
+    .stat b {
+        display: block;
+        font-size: 32px;
+        font-weight: 700;
+        letter-spacing: -1px;
+        background: linear-gradient(120deg, #fff, var(--text-sub));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+    }
+    .stat span { font-size: 13px; color: var(--text-dim); }
+
+    /* ============ 页脚 ============ */
+    footer {
+        margin-top: 100px;
+        padding: 34px 0;
+        border-top: 1px solid var(--line);
+    }
+    .foot-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        flex-wrap: wrap;
+        font-size: 13px;
+        color: var(--text-dim);
+    }
+    .foot-inner .disc { max-width: 620px; }
+
+    @media (max-width: 760px) {
+        nav.links, .status-chip { display: none; }
+        .hero { padding-top: 62px; }
+        .console { padding: 22px 18px; }
+        .result-head, .result-body { padding-left: 20px; padding-right: 20px; }
+        .console-foot { flex-direction: column-reverse; align-items: stretch; }
+        .btn-group { flex-direction: column-reverse; }
+        button.btn { justify-content: center; }
+    }
+</style>
+</head>
+<body>
+<div class="bg-decor"><div class="grid-mask"></div></div>
+
+<div class="wrap">
+    <header class="topbar">
+        <div class="container topbar-inner">
+            <div class="brand">
+                <div class="brand-mark">智</div>
+                <div class="brand-text">
+                    <b>智行</b>
+                    <span>Intelligent Travel Planning</span>
+                </div>
+            </div>
+            <nav class="links">
+                <a href="#console">智能咨询</a>
+                <a href="#ability">能力矩阵</a>
+                <a href="#flow">工作流程</a>
+            </nav>
+            <div class="status-chip"><i class="dot"></i> 多智能体服务运行中</div>
+        </div>
+    </header>
+
+    <main class="container">
+        <!-- Hero -->
+        <section class="hero" id="console">
+            <div class="eyebrow">MULTI-AGENT ORCHESTRATION</div>
+            <h1>让每一次出行<br><span class="grad">都有专业级的规划支撑</span></h1>
+            <p class="lead">
+                基于多智能体协同架构，融合地图服务、铁路票务与方案汇总能力，
+                从一句自然语言描述直接产出可执行的完整行程方案。
+            </p>
+
+            <!-- 咨询台 -->
+            <div class="console">
+                <div class="console-head">
+                    <div class="console-title">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M12 22V12"/><path d="m3 7 9 5 9-5"/>
+                        </svg>
+                        行程需求描述
+                    </div>
+                    <div class="console-sub">支持出发地 / 目的地 / 天数 / 预算 / 偏好 / 节奏</div>
+                </div>
+
+                <div class="field">
+                    <textarea id="query" placeholder="例如：我想从北京出发去天津玩一天，预算 800 元以内，喜欢历史人文类景点，节奏别太赶。"></textarea>
+                </div>
+
+                <div class="chips" id="chips">
+                    <button class="chip" type="button">北京到天津一日游，预算 800 元</button>
+                    <button class="chip" type="button">上海出发去杭州三天，偏爱自然风光</button>
+                    <button class="chip" type="button">广州到长沙两天，重点安排美食</button>
+                    <button class="chip" type="button">成都周边一日游，带老人出行节奏要慢</button>
+                </div>
+
+                <div class="console-foot">
+                    <div class="hint">按 <kbd>Ctrl</kbd> + <kbd>Enter</kbd> 快速提交</div>
+                    <div class="btn-group">
+                        <button class="btn btn-ghost" type="button" id="btn-clear">清空</button>
+                        <button class="btn btn-primary" type="button" id="btn-submit">
+                            <span id="btn-icon">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>
+                                </svg>
+                            </span>
+                            <span id="btn-label">生成行程方案</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 结果区 -->
+            <section id="result-zone">
+                <div class="result-card">
+                    <div class="result-head">
+                        <h3>
+                            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>
+                            </svg>
+                            规划结果
+                        </h3>
+                        <div class="result-actions">
+                            <span class="badge" id="result-badge">处理中</span>
+                            <button class="icon-btn" type="button" id="btn-copy" title="复制结果" disabled>
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                                </svg>
+                            </button>
+                            <button class="icon-btn" type="button" id="btn-export" title="导出为 Markdown 文件" disabled>
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="result-body" id="result-body"></div>
+                </div>
+            </section>
+        </section>
+
+        <!-- 能力矩阵 -->
+        <section class="section" id="ability">
+            <div class="section-head">
+                <span>Capability Matrix</span>
+                <h2>三个专职智能体，各司其职</h2>
+                <p>总控智能体负责需求抽取与任务分发，子智能体各自调用真实数据源完成专业作业。</p>
+            </div>
+            <div class="grid-3">
+                <div class="card">
+                    <div class="ico">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>
+                        </svg>
+                    </div>
+                    <h4>地图子智能体</h4>
+                    <p>接入高德地图服务，完成景点筛选、周边检索与路线分析，输出 3–6 个高价值景点并说明推荐理由。</p>
+                    <div class="tags"><i>POI 搜索</i><i>路径规划</i><i>周边推荐</i><i>地图生成</i></div>
+                </div>
+                <div class="card">
+                    <div class="ico">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="4" y="3" width="16" height="16" rx="2"/><path d="M4 11h16"/><path d="M12 3v8"/><path d="m8 19-2 3"/><path d="m16 19 2 3"/>
+                        </svg>
+                    </div>
+                    <h4>车票子智能体</h4>
+                    <p>对接 12306 数据服务，查询真实车次与票价，按预算敏感或时间敏感给出直达与中转建议。</p>
+                    <div class="tags"><i>车次查询</i><i>票价分析</i><i>中转方案</i><i>时间建议</i></div>
+                </div>
+                <div class="card">
+                    <div class="ico">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 11H5a2 2 0 0 0-2 2v7h6z"/><path d="M15 7h-6v13h6z"/><path d="M21 3h-6v17h6z"/>
+                        </svg>
+                    </div>
+                    <h4>方案汇总子智能体</h4>
+                    <p>合并景点与票务结果，按需求摘要、景点建议、车票建议、预算、行程表、注意事项六段固定结构成稿。</p>
+                    <div class="tags"><i>结果整合</i><i>预算估算</i><i>推荐 + 备选</i></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 流程 -->
+        <section class="section" id="flow">
+            <div class="section-head">
+                <span>How It Works</span>
+                <h2>从一句话到完整行程</h2>
+            </div>
+            <div class="flow">
+                <div class="step">
+                    <em>01</em>
+                    <h5>需求抽取</h5>
+                    <p>解析出发地、目的地、天数、预算、偏好与出行节奏，缺失项按稳妥默认值补全。</p>
+                </div>
+                <div class="step">
+                    <em>02</em>
+                    <h5>任务分发</h5>
+                    <p>总控智能体判断问题归属，将地图类与票务类任务分别派发给对应子智能体。</p>
+                </div>
+                <div class="step">
+                    <em>03</em>
+                    <h5>并行作业</h5>
+                    <p>子智能体调用外部数据源执行查询，返回结构化的专业结论而非原始数据。</p>
+                </div>
+                <div class="step">
+                    <em>04</em>
+                    <h5>方案成稿</h5>
+                    <p>汇总智能体整合全部结果，输出推荐方案、备选方案与预算估算。</p>
+                </div>
+            </div>
+
+            <div class="stats">
+                <div class="stat"><b>4</b><span>协同智能体</span></div>
+                <div class="stat"><b>2</b><span>外部数据源接入</span></div>
+                <div class="stat"><b>6</b><span>段式结构化输出</span></div>
+                <div class="stat"><b>100%</b><span>中文交付</span></div>
+            </div>
+        </section>
+
+        <footer>
+            <div class="foot-inner">
+                <div class="disc">
+                    本平台仅提供行程规划与出行建议，不办理真实购票；预算与票价均为估算值，不代表最终支付金额。
+                </div>
+                <div>© 2026 智行 · Intelligent Travel Planning</div>
+            </div>
+        </footer>
+    </main>
+</div>
+
+<script>
+(function () {
+    "use strict";
+
+    var $ = function (id) { return document.getElementById(id); };
+    var queryEl = $("query");
+    var btn = $("btn-submit");
+    var btnLabel = $("btn-label");
+    var btnIcon = $("btn-icon");
+    var zone = $("result-zone");
+    var body = $("result-body");
+    var badge = $("result-badge");
+
+    var lastResult = "";
+    var lastQuery = "";
+    var busy = false;
+    var timers = [];
+
+    /* ---------- 极简 Markdown 渲染（先转义，再结构化，避免 XSS） ---------- */
+    function escapeHtml(s) {
+        return s.replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;");
+    }
+
+    function inline(s) {
+        return s
+            .replace(/`([^`]+)`/g, "<code>$1</code>")
+            .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+            .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+            .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+                     '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    }
+
+    function isTableRow(line) { return /^\|.*\|\s*$/.test(line); }
+    function isDivider(line) { return /^\|[\s:|-]+\|\s*$/.test(line); }
+    function splitRow(line) {
+        return line.replace(/^\||\|\s*$/g, "").split("|").map(function (c) { return c.trim(); });
+    }
+
+    function renderMarkdown(src) {
+        var lines = escapeHtml(String(src).replace(/\r\n/g, "\n")).split("\n");
+        var out = [];
+        var listType = null;
+        var i = 0;
+
+        function closeList() {
+            if (listType) { out.push("</" + listType + ">"); listType = null; }
+        }
+
+        while (i < lines.length) {
+            var line = lines[i];
+            var trimmed = line.trim();
+
+            if (!trimmed) { closeList(); i++; continue; }
+
+            // 表格
+            if (isTableRow(trimmed) && i + 1 < lines.length && isDivider(lines[i + 1].trim())) {
+                closeList();
+                var head = splitRow(trimmed);
+                i += 2;
+                var rows = [];
+                while (i < lines.length && isTableRow(lines[i].trim())) {
+                    rows.push(splitRow(lines[i].trim()));
+                    i++;
+                }
+                out.push("<table><thead><tr>");
+                head.forEach(function (c) { out.push("<th>" + inline(c) + "</th>"); });
+                out.push("</tr></thead><tbody>");
+                rows.forEach(function (r) {
+                    out.push("<tr>");
+                    r.forEach(function (c) { out.push("<td>" + inline(c) + "</td>"); });
+                    out.push("</tr>");
+                });
+                out.push("</tbody></table>");
+                continue;
+            }
+
+            // 分割线
+            if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+                closeList(); out.push("<hr>"); i++; continue;
+            }
+
+            // 标题
+            var h = /^(#{1,6})\s+(.*)$/.exec(trimmed);
+            if (h) {
+                closeList();
+                var lv = Math.min(h[1].length, 3);
+                out.push("<h" + lv + ">" + inline(h[2]) + "</h" + lv + ">");
+                i++; continue;
+            }
+
+            // 引用
+            if (/^&gt;\s?/.test(trimmed)) {
+                closeList();
+                out.push("<blockquote>" + inline(trimmed.replace(/^&gt;\s?/, "")) + "</blockquote>");
+                i++; continue;
+            }
+
+            // 有序列表
+            var ol = /^\d+[.)]\s+(.*)$/.exec(trimmed);
+            if (ol) {
+                if (listType !== "ol") { closeList(); out.push("<ol>"); listType = "ol"; }
+                out.push("<li>" + inline(ol[1]) + "</li>");
+                i++; continue;
+            }
+
+            // 无序列表
+            var ul = /^[-*+•]\s+(.*)$/.exec(trimmed);
+            if (ul) {
+                if (listType !== "ul") { closeList(); out.push("<ul>"); listType = "ul"; }
+                out.push("<li>" + inline(ul[1]) + "</li>");
+                i++; continue;
+            }
+
+            closeList();
+            out.push("<p>" + inline(trimmed) + "</p>");
+            i++;
+        }
+        closeList();
+        return out.join("");
+    }
+
+    /* ---------- 加载态 ---------- */
+    var STEPS = [
+        "解析行程需求与关键信息",
+        "调度地图子智能体检索景点与路线",
+        "调度车票子智能体查询车次与票价",
+        "汇总智能体整合最终方案"
+    ];
+
+    function showLoading() {
+        badge.className = "badge";
+        badge.textContent = "处理中";
+        var html = '<div class="skeleton"><div class="sk-steps">';
+        STEPS.forEach(function (s, idx) {
+            html += '<div class="sk-step" data-idx="' + idx + '"><span class="ring"></span><span>' + s + "</span></div>";
+        });
+        html += "</div>";
+        html += '<div class="sk-line" style="width:92%"></div><div class="sk-line" style="width:78%"></div><div class="sk-line" style="width:86%"></div><div class="sk-line" style="width:64%"></div></div>';
+        body.innerHTML = html;
+        zone.classList.add("show");
+        setActionsEnabled(false);
+
+        clearTimers();
+        STEPS.forEach(function (_, idx) {
+            if (idx === STEPS.length - 1) return;
+            timers.push(setTimeout(function () {
+                var el = body.querySelector('.sk-step[data-idx="' + idx + '"]');
+                if (el) {
+                    el.classList.add("done");
+                    el.querySelector(".ring").textContent = "✓";
+                }
+            }, 2600 * (idx + 1)));
+        });
+    }
+
+    function clearTimers() {
+        timers.forEach(clearTimeout);
+        timers = [];
+    }
+
+    function showResult(text) {
+        clearTimers();
+        lastResult = text;
+        badge.className = "badge ok";
+        badge.textContent = "已完成";
+        body.innerHTML = '<div class="md">' + renderMarkdown(text) + "</div>";
+        setActionsEnabled(true);
+    }
+
+    function showError(title, detail) {
+        clearTimers();
+        lastResult = "";
+        badge.className = "badge err";
+        badge.textContent = "请求失败";
+        body.innerHTML =
+            '<div class="err-box"><div>' +
+            "<b>" + escapeHtml(title) + "</b>" +
+            escapeHtml(detail) +
+            "</div></div>";
+        setActionsEnabled(false);
+    }
+
+    function setActionsEnabled(state) {
+        $("btn-copy").disabled = !state;
+        $("btn-export").disabled = !state;
+    }
+
+    function setBusy(state) {
+        busy = state;
+        btn.disabled = state;
+        btnLabel.textContent = state ? "智能体协同处理中" : "生成行程方案";
+        btnIcon.innerHTML = state
+            ? '<span class="spinner"></span>'
+            : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>';
+    }
+
+    /* ---------- 提交 ---------- */
+    function submit() {
+        if (busy) return;
+        var q = queryEl.value.trim();
+        if (!q) {
+            queryEl.focus();
+            queryEl.style.borderColor = "rgba(248,113,113,.6)";
+            setTimeout(function () { queryEl.style.borderColor = ""; }, 1200);
+            return;
+        }
+
+        setBusy(true);
+        showLoading();
+        lastQuery = q;
+        zone.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+        fetch("/api/query_agent/" + encodeURIComponent(q))
+            .then(function (res) {
+                if (!res.ok) throw new Error("接口返回状态码 " + res.status);
+                return res.text();
+            })
+            .then(function (raw) {
+                var text = raw;
+                try {
+                    var parsed = JSON.parse(raw);
+                    if (typeof parsed === "string") text = parsed;
+                    else if (parsed && typeof parsed === "object") text = parsed.content || parsed.result || raw;
+                } catch (e) { /* 非 JSON，按纯文本处理 */ }
+
+                text = String(text).trim();
+                if (!text) { showError("未获得有效方案", "服务已响应但内容为空，请补充出发地、目的地等关键信息后重试。"); return; }
+                showResult(text);
+            })
+            .catch(function (err) {
+                showError("规划请求未能完成", (err && err.message ? err.message : "网络异常") + "。请确认后端服务已启动，然后重试。");
+            })
+            .then(function () { setBusy(false); });
+    }
+
+    btn.addEventListener("click", submit);
+
+    $("btn-clear").addEventListener("click", function () {
+        queryEl.value = "";
+        zone.classList.remove("show");
+        clearTimers();
+        setActionsEnabled(false);
+        queryEl.focus();
+    });
+
+    queryEl.addEventListener("keydown", function (e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); submit(); }
+    });
+
+    $("chips").addEventListener("click", function (e) {
+        var chip = e.target.closest(".chip");
+        if (!chip) return;
+        queryEl.value = chip.textContent.trim();
+        queryEl.focus();
+    });
+
+    $("btn-copy").addEventListener("click", function () {
+        if (!lastResult) return;
+        var done = function () {
+            var b = $("btn-copy");
+            var old = b.innerHTML;
+            b.innerHTML = "✓";
+            setTimeout(function () { b.innerHTML = old; }, 1400);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(lastResult).then(done).catch(function () {});
+        }
+    });
+
+    /* ---------- 导出 Markdown ---------- */
+    function pad(n) { return n < 10 ? "0" + n : String(n); }
+
+    function stamp(d) {
+        return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+               " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+    }
+
+    function fileStamp(d) {
+        return String(d.getFullYear()) + pad(d.getMonth() + 1) + pad(d.getDate()) +
+               "_" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+    }
+
+    // 去掉 Windows/类 Unix 文件名非法字符，并限制长度
+    function safeName(s) {
+        return s.replace(/[\\/:*?"<>|\r\n\t]/g, "")
+                .replace(/\s+/g, "")
+                .slice(0, 24);
+    }
+
+    function buildMarkdown() {
+        var now = new Date();
+        var lines = [
+            "# 旅游规划方案",
+            "",
+            "- 生成时间：" + stamp(now),
+            "- 原始需求：" + (lastQuery || "（未记录）"),
+            "- 生成方式：多智能体协同（地图 / 车票 / 汇总）",
+            "",
+            "---",
+            "",
+            lastResult.trim(),
+            "",
+            "---",
+            "",
+            "> 本方案仅供出行参考，不办理真实购票；预算与票价均为估算值，不代表最终支付金额。",
+            ""
+        ];
+        return lines.join("\n");
+    }
+
+    $("btn-export").addEventListener("click", function () {
+        if (!lastResult) return;
+
+        var now = new Date();
+        var name = "旅游规划方案";
+        var hint = safeName(lastQuery);
+        if (hint) name += "_" + hint;
+        name += "_" + fileStamp(now) + ".md";
+
+        var blob = new Blob([buildMarkdown()], { type: "text/markdown;charset=utf-8" });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+
+        var b = $("btn-export");
+        var old = b.innerHTML;
+        b.innerHTML = "✓";
+        setTimeout(function () { b.innerHTML = old; }, 1400);
+    });
+})();
+</script>
+</body>
+</html>

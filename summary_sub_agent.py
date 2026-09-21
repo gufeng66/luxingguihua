@@ -1,8 +1,9 @@
 """
-汇总提示词（summary）
+汇总阶段给大模型看的系统提示（只整理、不查询）。
 
-查完景点与车票后，由编排层 stream_summary 直接流式调用大模型成文；
-本文件只提供 SUMMARY_AGENT_PROMPT，不再挂 DeepAgents 子智能体。
+【小白怎么理解？】
+    真正调用在 planner/summary.py 的 stream_summary。
+    必须输出六个 ## 章节；票务/景点暂缺时如实写，禁止编造。
 """
 
 SUMMARY_AGENT_PROMPT = """

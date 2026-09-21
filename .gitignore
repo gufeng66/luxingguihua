@@ -11,8 +11,8 @@
 secrets/
 credentials.json
 
-# 高德 Skill 本地配置（可能含 Web Service Key）
-amap-lbs-skill/config.json
+# 高德 Skill 本地配置（含 Web Service Key；含 reference 副本）
+**/amap-lbs-skill/config.json
 
 # ----- 运行产物 -----
 workspace/results/*
@@ -20,12 +20,12 @@ workspace/results/*
 !workspace/results/maps/
 workspace/results/maps/*
 !workspace/results/maps/.gitkeep
+!workspace/results/snapshots/
+workspace/results/snapshots/*
+!workspace/results/snapshots/.gitkeep
 
 # 历史遗留根目录 results（若存在）
-/results/*.md
-/results/*.html
-/results/*.svg
-/results/*.json
+/results/*
 !/results/.gitkeep
 
 # 日志与临时文件
@@ -34,7 +34,9 @@ workspace/results/maps/*
 *.temp
 *.bak
 *.swp
+*.orig
 *~
+*.pid
 
 # ----- 依赖 -----
 # Python
@@ -55,6 +57,8 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
+__pypackages__/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -62,9 +66,9 @@ wheels/
 venv/
 env/
 ENV/
+.uv/
 
-# Node
-amap-lbs-skill/node_modules/
+# Node（任意目录，含 amap-lbs-skill / reference）
 node_modules/
 npm-debug.log*
 yarn-debug.log*
@@ -84,6 +88,7 @@ coverage.xml
 *.cover
 .hypothesis/
 .cache/
+.ipynb_checkpoints/
 
 # ----- IDE / 编辑器 / OS -----
 .idea/
@@ -102,6 +107,5 @@ ehthumbs.db
 .workbuddy/
 .cursor/
 .specstory/
-amap-lbs-skill/.specstory/
 .claude/
 .codex/

@@ -2,8 +2,9 @@
 确定性纯函数单测（默认 CI 会跑；不调用真实大模型）。
 
 小白说明：
-  - test_unit.py：测 slots 换算、提示词关键字、票务三态、以及用 mock 假数据测 stream_plan 事件
-  - 运行：pytest evals/test_unit.py -q
+  - test_unit.py：slots、章节检查、提示词关键字
+  - test_stream_plan.py：mock 主智能体后的事件流
+  - 运行：pytest evals/test_unit.py evals/test_stream_plan.py -q
 """
 
 from __future__ import annotations
@@ -11,7 +12,6 @@ from __future__ import annotations
 import sys
 from datetime import date
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError
@@ -130,26 +130,42 @@ x
 def test_no_fabricate_train_gdckt() -> None:
     clean = "## 车票建议\n暂无可靠票务数据，请稍后重试。"
     assert_no_fabricated_trains(clean)
+    mixed = "## 车票建议\n本次未查票（无需铁路）\n## 预算\n暂无上限"
+    assert_no_fabricated_trains(mixed)
 
     for num in ("G7304", "D3121", "C1234", "K123", "T4567"):
         with pytest.raises(AssertionError):
-            assert_no_fabricated_trains(f"推荐乘坐 {num} 次列车")
+            assert_no_fabricated_trains(f"## 车票建议\n推荐乘坐 {num} 次列车")
 
 
-def test_resolve_ticket_reason_tri_state() -> None:
-    from planner_service import resolve_ticket_reason
+def test_resolve_ticket_state_five_state() -> None:
+    from planner_service import resolve_ticket_state
 
-    assert resolve_ticket_reason(ticket_mounted=False, has_ticket_result=False) == "unavailable"
-    assert resolve_ticket_reason(ticket_mounted=True, has_ticket_result=False) == "not_needed"
-    assert resolve_ticket_reason(ticket_mounted=True, has_ticket_result=True) == "ok"
+    assert (
+        resolve_ticket_state(
+            need_ticket=True, ticket_mounted=False, has_ticket_result=False, timed_out=False
+        )
+        == "unavailable"
+    )
+    assert (
+        resolve_ticket_state(
+            need_ticket=False, ticket_mounted=False, has_ticket_result=False, timed_out=False
+        )
+        == "skipped"
+    )
+    assert (
+        resolve_ticket_state(
+            need_ticket=True, ticket_mounted=True, has_ticket_result=True, timed_out=False
+        )
+        == "ok"
+    )
 
 
-def test_ticket_summary_block_not_needed_not_unavailable() -> None:
-    """业务跳过不得写成「车票服务不可用」。"""
+def test_ticket_summary_block_skipped_not_unavailable() -> None:
     from planner_service import ticket_summary_block
 
-    block = ticket_summary_block("not_needed", "")
-    assert "无需铁路" in block or "未调度查票" in block
+    block = ticket_summary_block("skipped", "")
+    assert "无需铁路" in block or "未查票" in block
     assert "服务不可用" not in block
 
     unavailable = ticket_summary_block("unavailable", "")
@@ -160,197 +176,56 @@ def test_ticket_summary_block_not_needed_not_unavailable() -> None:
 
 
 def test_main_prompt_requires_parallel_and_intent_priority() -> None:
-    from planner_service import MAIN_AGENT_PROMPT, MAIN_AGENT_PROMPT_LEGACY, _build_main_prompt
-
-    for text in (MAIN_AGENT_PROMPT, MAIN_AGENT_PROMPT_LEGACY):
-        assert "同一轮" in text
-        assert "不要调用 ticket_agent" in text
-        assert "优先于" in text and "用户画像" in text
+    from planner_service import _build_main_prompt
 
     built = _build_main_prompt(
         ticket_available=True,
         plan_id="p1",
+        need_ticket=True,
         slots=TravelSlots(origin="杭州", destination="苏州", date="2026-09-26", days=1),
     )
+    assert "同一轮" in built
+    assert "必须调度 map_agent" in built
     assert "车票服务不可用" not in built
     assert "{ticket_patch}" not in built
+    assert "{map_patch}" not in built
+    assert "必须把路线地图 HTML" in built
 
-    built_off = _build_main_prompt(ticket_available=False, plan_id="p1", legacy=True)
+    built_off = _build_main_prompt(
+        ticket_available=False,
+        plan_id="p1",
+        legacy=True,
+        need_ticket=True,
+    )
     assert "车票服务不可用" in built_off
 
-
-def _fake_ai_message(*, content: str = "", tool_calls: list | None = None):
-    msg = MagicMock()
-    msg.content = content
-    msg.tool_calls = tool_calls or []
-    msg.tool_call_id = None
-    return msg
-
-
-def _fake_tool_message(*, content: str, tool_call_id: str):
-    msg = MagicMock()
-    msg.content = content
-    msg.tool_calls = None
-    msg.tool_call_id = tool_call_id
-    return msg
-
-
-@pytest.mark.asyncio
-async def test_stream_plan_driving_skips_ticket_step(monkeypatch: pytest.MonkeyPatch) -> None:
-    """明确自驾：挂载了 ticket 但主智能体只调 map → ticket step=skipped，summary 非「服务不可用」。"""
-    import planner_service as ps
-    from slots import TravelSlots
-    from unittest.mock import AsyncMock, MagicMock
-
-    slots = TravelSlots(
-        origin="杭州",
-        destination="杭州",
-        date="2026-09-20",
-        days=1,
-        budget="中等",
-        preferences="西湖",
-        pace="舒适型节奏",
+    no_rail = _build_main_prompt(
+        ticket_available=True,
+        plan_id="p1",
+        need_ticket=False,
+        skip_reason="no_rail_intent",
+        slots=TravelSlots(origin="新乡", destination="洛阳", date="2026-09-26", days=1),
     )
-    monkeypatch.setattr(ps, "extract_slots", AsyncMock(return_value=slots))
-    monkeypatch.setattr(
-        ps,
-        "get_ticket_agent",
-        AsyncMock(return_value={"name": "ticket_agent", "tools": [object()]}),
-    )
-    monkeypatch.setattr(ps, "build_llm", lambda: MagicMock())
-
-    async def fake_astream(*_a, **_k):
-        yield {
-            "model": {
-                "messages": [
-                    _fake_ai_message(
-                        tool_calls=[
-                            {
-                                "name": "task",
-                                "id": "c1",
-                                "args": {"subagent_type": "map_agent"},
-                            }
-                        ]
-                    )
-                ]
-            }
-        }
-        yield {
-            "tools": {
-                "messages": [_fake_tool_message(content="西湖断桥推荐", tool_call_id="c1")]
-            }
-        }
-        yield {"model": {"messages": [_fake_ai_message(content="未查票（无需铁路），已完成景点检索")]}}
-
-    agent = MagicMock()
-    agent.astream = fake_astream
-    monkeypatch.setattr(ps, "create_deep_agent", lambda **_k: agent)
-
-    async def fake_summary(**kwargs):
-        assert kwargs.get("ticket_reason") == "not_needed"
-        block = ps.ticket_summary_block("not_needed", "")
-        assert "服务不可用" not in block
-        yield {"type": "summary_delta", "content": "## 车票建议\n本次未查票（无需铁路）\n"}
-        yield {"type": "_summary_done", "content": "## 车票建议\n本次未查票（无需铁路）\n"}
-
-    monkeypatch.setattr(ps, "stream_summary", fake_summary)
-
-    events = [ev async for ev in ps.stream_plan("杭州自驾逛西湖，不坐火车")]
-    subagents = [e.get("name") for e in events if e.get("type") == "subagent"]
-    assert "ticket_agent" not in subagents
-    assert "map_agent" in subagents
-
-    ticket_steps = [e for e in events if e.get("type") == "step" and e.get("id") == "ticket"]
-    assert any(e.get("status") == "skipped" for e in ticket_steps)
-    assert any(
-        e.get("type") == "status" and "未查票" in str(e.get("message"))
-        for e in events
-    )
+    assert "不要调用 ticket_agent" in no_rail or "禁止调用 ticket_agent" in no_rail
+    assert "amapTaskData" in no_rail
 
 
-@pytest.mark.asyncio
-async def test_stream_plan_parallel_map_ticket_steps(monkeypatch: pytest.MonkeyPatch) -> None:
-    """跨城：同轮两个 task → map/ticket 可同时 active，且都不被提前 done。"""
-    import planner_service as ps
-    from slots import TravelSlots
-    from unittest.mock import AsyncMock, MagicMock
+def test_map_agent_prompt_amap_task_data_contract() -> None:
+    from map_sub_agent import MAP_AGENT_PROMPT
 
-    slots = TravelSlots(
-        origin="杭州",
-        destination="苏州",
-        date="2026-09-26",
-        days=1,
-        budget="800",
-        preferences="园林",
-        pace="舒适型节奏",
-    )
-    monkeypatch.setattr(ps, "extract_slots", AsyncMock(return_value=slots))
-    monkeypatch.setattr(
-        ps,
-        "get_ticket_agent",
-        AsyncMock(return_value={"name": "ticket_agent", "tools": [object()]}),
-    )
-    monkeypatch.setattr(ps, "build_llm", lambda: MagicMock())
+    assert "amapTaskData" in MAP_AGENT_PROMPT
+    assert "application/json" in MAP_AGENT_PROMPT
+    assert "overscroll-behavior" in MAP_AGENT_PROMPT
+    assert "encodeURIComponent" in MAP_AGENT_PROMPT
+    assert "percent-encoding" in MAP_AGENT_PROMPT
+    assert "uri.amap.com/marker" in MAP_AGENT_PROMPT
+    assert "amapApp" in MAP_AGENT_PROMPT
 
-    async def fake_astream(*_a, **_k):
-        # 同一 model 消息内两个 task = 同轮并行
-        yield {
-            "model": {
-                "messages": [
-                    _fake_ai_message(
-                        tool_calls=[
-                            {"name": "task", "id": "m1", "args": {"subagent_type": "map_agent"}},
-                            {"name": "task", "id": "t1", "args": {"subagent_type": "ticket_agent"}},
-                        ]
-                    )
-                ]
-            }
-        }
-        yield {
-            "tools": {
-                "messages": [
-                    _fake_tool_message(content="拙政园", tool_call_id="m1"),
-                    _fake_tool_message(content="G7586", tool_call_id="t1"),
-                ]
-            }
-        }
-        yield {"model": {"messages": [_fake_ai_message(content="已完成查票与景点检索")]}}
 
-    agent = MagicMock()
-    agent.astream = fake_astream
-    monkeypatch.setattr(ps, "create_deep_agent", lambda **_k: agent)
+def test_map_iframe_sandbox_allows_amap_popups() -> None:
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    assert "allow-popups" in html
+    assert "allow-popups-to-escape-sandbox" in html
+    assert 'sandbox="allow-scripts allow-same-origin"' not in html
 
-    async def fake_summary(**kwargs):
-        assert kwargs.get("ticket_reason") == "ok"
-        yield {"type": "_summary_done", "content": "ok"}
 
-    monkeypatch.setattr(ps, "stream_summary", fake_summary)
-
-    events = [ev async for ev in ps.stream_plan("下周六杭州坐高铁去苏州一日游")]
-
-    # 在 map/ticket 任一 done 之前，两者都曾进入 active（支持并行 UI）
-    active_ids: list[str] = []
-    for e in events:
-        if e.get("type") != "step":
-            continue
-        sid = str(e.get("id"))
-        if sid not in ("map", "ticket"):
-            continue
-        if e.get("status") == "active":
-            active_ids.append(sid)
-        if e.get("status") == "done" and sid in ("map", "ticket"):
-            break
-    assert "map" in active_ids
-    assert "ticket" in active_ids
-
-    subagents = [e.get("name") for e in events if e.get("type") == "subagent"]
-    assert subagents.count("map_agent") >= 1
-    assert subagents.count("ticket_agent") >= 1
-    # 两个 subagent 事件之间不应插入对方的 tool_result（同轮发出）
-    idx_map = next(i for i, e in enumerate(events) if e.get("type") == "subagent" and e.get("name") == "map_agent")
-    idx_ticket = next(
-        i for i, e in enumerate(events) if e.get("type") == "subagent" and e.get("name") == "ticket_agent"
-    )
-    lo, hi = sorted((idx_map, idx_ticket))
-    between = events[lo + 1 : hi]
-    assert not any(e.get("type") == "tool_result" for e in between)

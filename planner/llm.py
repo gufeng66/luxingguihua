@@ -1,4 +1,10 @@
-"""LLM 初始化与槽位抽取。"""
+"""
+大模型：建客户端 + 把用户一句话抽成 TravelSlots。
+
+【小白怎么理解？】
+    密钥走 OpenAI 兼容协议（DeepSeek 的 OPENAI_BASE_URL）。
+    extract_slots 失败不要在这里吞掉：pipeline 捕获后降级成「原模式规划」。
+"""
 
 from __future__ import annotations
 

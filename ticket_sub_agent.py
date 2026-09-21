@@ -19,15 +19,20 @@ import asyncio
 # 通用类型标注
 from typing import Any
 
-# 加载 .env（本模块主要不直连 Key，但保持一致习惯）
+import os
+
 from dotenv import find_dotenv, load_dotenv
 # LangChain 官方 MCP 适配器：把远程工具变成可调用的 StructuredTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 load_dotenv(find_dotenv())
 
-# ModelScope 上托管的 12306 MCP 地址（公开演示用；以你账号配置为准）
-MCP_12306_URL = "https://mcp.api-inference.modelscope.net/4654213017684d/mcp"
+DEFAULT_MCP_12306_URL = "https://mcp.api-inference.modelscope.net/4654213017684d/mcp"
+
+
+def mcp_12306_url() -> str:
+    """12306 MCP 地址：.env 的 MCP_12306_URL 优先，否则用仓库默认演示地址。"""
+    return (os.getenv("MCP_12306_URL") or "").strip() or DEFAULT_MCP_12306_URL
 # 单次拉取工具列表最多等 15 秒，超时算失败
 MCP_TIMEOUT_SECONDS = 15
 # 最多尝试 2 次（失败再试一次）
@@ -83,7 +88,7 @@ async def build_ticket_agent() -> tuple[dict[str, Any], Any]:
             {
                 "12306-mcp": {
                     "transport": "streamable_http",
-                    "url": MCP_12306_URL,
+                    "url": mcp_12306_url(),
                 }
             }
         )
