@@ -11,7 +11,7 @@
 secrets/
 credentials.json
 
-# 高德 Skill 本地配置（含 Web Service Key；含 reference 副本）
+# 高德 Skill 本地配置（含 Web Service Key）
 **/amap-lbs-skill/config.json
 
 # ----- 运行产物 -----
@@ -68,12 +68,17 @@ env/
 ENV/
 .uv/
 
-# Node（任意目录，含 amap-lbs-skill / reference）
+# Node（任意目录，含 amap-lbs-skill）
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 package-lock.json.bak
+# 在仓库根跑高德脚本时的临时输出（skill 目录内另有同名规则）
+/node_err.txt
+/out.txt
+/test_out.txt
+/large_tool_results/
 
 # ----- 测试 / 类型检查 / 覆盖率 -----
 .pytest_cache/

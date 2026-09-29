@@ -38,6 +38,7 @@ from slots import (
     should_clarify,
 )
 
+from planner.async_utils import ms_since
 from planner.backends import backend
 from planner.dispatch import DispatchRun, iter_dispatch
 from planner.paths import MAPS_DIR, dispatch_timeout_seconds
@@ -70,9 +71,15 @@ def _svc():
     return svc
 
 
-def _ms_since(t0: float) -> int:
-    """monotonic 起点到现在的毫秒数（给 timings / step.elapsed_ms）。"""
-    return int((time.monotonic() - t0) * 1000)
+def _clarify_event(slots: TravelSlots) -> dict[str, Any]:
+    preview, defaults_applied = apply_soft_defaults(slots)
+    return {
+        "type": "clarify",
+        "slots": preview.model_dump(),
+        "missing": missing_critical(slots),
+        "defaults_applied": defaults_applied,
+        "message": "请确认或补全关键信息后继续",
+    }
 
 
 async def stream_plan(
@@ -153,11 +160,7 @@ async def stream_plan(
 
         llm = svc.build_llm()
 
-        if revision_kind == "map_only":
-            confirmed = TravelSlots.model_validate(snapshot.get("slots") or {})
-            confirmed, _ = apply_soft_defaults(confirmed)
-            yield {"type": "slots", "slots": confirmed.model_dump()}
-        elif revision_kind == "summary_only":
+        if revision_kind in ("map_only", "summary_only"):
             confirmed = TravelSlots.model_validate(snapshot.get("slots") or {})
             confirmed, _ = apply_soft_defaults(confirmed)
             yield {"type": "slots", "slots": confirmed.model_dump()}
@@ -171,26 +174,12 @@ async def stream_plan(
             confirmed, _ = apply_soft_defaults(confirmed)
             yield {"type": "slots", "slots": confirmed.model_dump()}
             if should_clarify(confirmed, slots_from_client=True):
-                preview, defaults_applied = apply_soft_defaults(confirmed)
-                yield {
-                    "type": "clarify",
-                    "slots": preview.model_dump(),
-                    "missing": missing_critical(confirmed),
-                    "defaults_applied": defaults_applied,
-                    "message": "请确认或补全关键信息后继续",
-                }
+                yield _clarify_event(confirmed)
                 yield {"type": "step", "id": "understand", "status": "done"}
                 return
         elif confirmed is not None:
             if should_clarify(confirmed, slots_from_client=True):
-                preview, defaults_applied = apply_soft_defaults(confirmed)
-                yield {
-                    "type": "clarify",
-                    "slots": preview.model_dump(),
-                    "missing": missing_critical(confirmed),
-                    "defaults_applied": defaults_applied,
-                    "message": "请确认或补全关键信息后继续",
-                }
+                yield _clarify_event(confirmed)
                 yield {"type": "step", "id": "understand", "status": "done"}
                 return
             confirmed, _ = apply_soft_defaults(confirmed)
@@ -200,14 +189,7 @@ async def stream_plan(
                 extracted = await svc.extract_slots(query, llm)
                 yield {"type": "slots", "slots": extracted.model_dump()}
                 if should_clarify(extracted, slots_from_client=False):
-                    preview, defaults_applied = apply_soft_defaults(extracted)
-                    yield {
-                        "type": "clarify",
-                        "slots": preview.model_dump(),
-                        "missing": missing_critical(extracted),
-                        "defaults_applied": defaults_applied,
-                        "message": "请确认或补全关键信息后继续",
-                    }
+                    yield _clarify_event(extracted)
                     yield {"type": "step", "id": "understand", "status": "done"}
                     return
                 confirmed, _ = apply_soft_defaults(extracted)
@@ -219,7 +201,7 @@ async def stream_plan(
         if cancel_event is not None and cancel_event.is_set():
             return
 
-        understand_ms = _ms_since(t_understand)
+        understand_ms = ms_since(t_understand)
         yield {"type": "step", "id": "understand", "status": "done", "elapsed_ms": understand_ms}
 
         # —— 路由：要不要铁路、要不要路线地图 ——
@@ -264,7 +246,7 @@ async def stream_plan(
                 ticket_agent = await svc.get_ticket_agent()
                 lookup = last_lookup()
                 ticket_cache_hit = bool(lookup.get("cache_hit"))
-                ticket_mcp_ms = int(lookup.get("connect_ms") or _ms_since(t_mcp))
+                ticket_mcp_ms = int(lookup.get("connect_ms") or ms_since(t_mcp))
                 if cancel_event is not None and cancel_event.is_set():
                     return
                 if ticket_agent is None:
@@ -444,7 +426,7 @@ async def stream_plan(
         if cancelled:
             return
 
-        summary_ms = _ms_since(t_summary)
+        summary_ms = ms_since(t_summary)
         yield {"type": "step", "id": "summary", "status": "done", "elapsed_ms": summary_ms}
 
         # —— 落盘 Markdown + 修订快照，带上耗时与地图 URL ——
@@ -470,7 +452,7 @@ async def stream_plan(
             "ticket_mcp_ms": ticket_mcp_ms,
             "dispatch_ms": dispatch_ms,
             "summary_ms": summary_ms,
-            "total_ms": _ms_since(t_total),
+            "total_ms": ms_since(t_total),
             "ticket_cache_hit": ticket_cache_hit,
             "parallel_dispatch": bool(parallel_tasks and parallel_results),
         }

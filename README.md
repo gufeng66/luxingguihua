@@ -96,11 +96,11 @@ cp .env.example .env
 |------|----------|----------|
 | Fit2Cloud | https://ai.fit2cloud.cn/gateway/v1 | `OPENAI_API_KEY`、`OPENAI_BASE_URL=https://ai.fit2cloud.cn/gateway/v1`（模型 `f2c-deepseek-v4-flash`） |
 | 高德 Web 服务 | https://lbs.amap.com/api/webservice/create-project-and-key | `AMAP_WEBSERVICE_KEY` |
-| LangSmith（可选） | https://smith.langchain.com | `LANGSMITH_API_KEY`、`LANGSMITH_PROJECT=travel-planner` |
+| LangSmith（可选） | https://smith.langchain.com | `LANGSMITH_TRACING`、`LANGSMITH_API_KEY`、`LANGSMITH_PROJECT=travel-planner`；自动链接失败时再填 `LANGSMITH_ORG_ID` |
 
-也可把高德 Key 写入 `amap-lbs-skill/config.json`（由 `config.example.json` 复制），该文件已被 gitignore。
+同文件里还有：`CORS_ORIGINS`（默认同源 `127.0.0.1:8000`）、`MCP_12306_URL`（不填用公开地址）、`DISPATCH_TIMEOUT_SECONDS`（默认 360，只限制不需要地图时的主智能体）。
 
-12306 MCP 默认使用公开的 ModelScope 地址，可用环境变量 `MCP_12306_URL` 覆盖（见 `planner/ticket_agent.py`）。
+也可把高德 Key 写入 `amap-lbs-skill/config.json`（由 `config.example.json` 复制），该文件已被 gitignore。`MCP_12306_URL` 的默认地址在 `planner/ticket_agent.py`。
 
 ### 4. 启动
 
@@ -208,13 +208,20 @@ python app.py   # 交互输入
 ├── slots.py                # 槽位模型与相对日期解析
 ├── app.py                  # CLI 入口
 ├── server.py               # FastAPI + SSE
-├── frontend/               # 页面：index.html 结构，app.js 交互，map.js 高德链接
+├── frontend/               # 页面
+│   ├── index.html          # 结构
+│   ├── app.js              # 交互与 SSE
+│   ├── samples.js          # 首页演示稿
+│   ├── map.js              # 高德链接与路线预览
+│   └── style.css
 ├── amap-lbs-skill/         # 高德地图 Skill（Node，只读挂载）
-├── evals/                  # 单元 / 集成评测
+├── evals/                  # 单元 / 集成评测（说明见 evals/README.md）
 ├── workspace/
 │   ├── config/memory/      # 智能体长期记忆
-│   └── results/maps/       # 运行产物（git 忽略内容）
+│   └── results/            # 方案 md、maps/、snapshots/（内容 git 忽略，目录有 .gitkeep）
+├── .github/workflows/ci.yml
 ├── requirements.txt
+├── pytest.ini
 ├── .env.example
 ├── .gitignore
 └── README.md
@@ -227,7 +234,7 @@ python app.py   # 交互输入
 ## 评测
 
 ```bash
-# 默认 CI：纯函数 + mock，无网络
+# 默认 CI（.github/workflows/ci.yml，Python 3.11 / 3.12）：纯函数 + mock，无网络
 pytest -q -m "not integration"
 
 # 集成：需 .env 中 DeepSeek Key

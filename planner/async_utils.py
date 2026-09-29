@@ -9,8 +9,14 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
+
+
+def ms_since(t0: float) -> int:
+    """monotonic 起点到现在的毫秒数。"""
+    return int((time.monotonic() - t0) * 1000)
 
 
 def truncate(text: str, limit: int = 2000) -> str:

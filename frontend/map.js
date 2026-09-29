@@ -154,21 +154,37 @@ function _pair(arr) {
   return Number.isFinite(p[0]) && Number.isFinite(p[1]) ? p : null;
 }
 
-function shortPoiName(text) {
-  const raw = String(text || "未命名").trim();
-  const cut = raw.split(/[（(｜|]/)[0].trim();
-  if (!cut) return raw.slice(0, 10);
-  return cut.length > 8 ? cut.slice(0, 8) + "…" : cut;
-}
-
 function dayColor(day) {
   const palette = ["#2a9d8f", "#c47a2c", "#3d5a80", "#9b4d7a", "#c45c4a"];
   const i = Math.max(1, Number(day) || 1) - 1;
   return palette[i % palette.length];
 }
 
+function coordKey(lnglat) {
+  // ponytail: 1e-4°（约 11 米）内算同一点。同一站入口差更远时再放宽。
+  if (!Array.isArray(lnglat) || lnglat.length < 2) return "";
+  const lon = Number(lnglat[0]);
+  const lat = Number(lnglat[1]);
+  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return "";
+  return Math.round(lon * 1e4) + "," + Math.round(lat * 1e4);
+}
+
+function stampPoiLabels(tasks) {
+  /** 按出现顺序编号。同一坐标只保留第一次的序号，起点与终点重合时起点仍是 1。 */
+  const seen = Object.create(null);
+  let n = 0;
+  return (Array.isArray(tasks) ? tasks : []).map((item) => {
+    if (!item || item.type !== "poi") return item;
+    const key = coordKey(item.lnglat);
+    if (!key) return item;
+    n += 1;
+    if (seen[key] == null) seen[key] = n;
+    return Object.assign({}, item, { label: seen[key] });
+  });
+}
+
 function buildMapViewerHtml(tasks, dayFilter) {
-  const rows = filterTasksByDay(tasks, dayFilter);
+  const rows = stampPoiLabels(filterTasksByDay(tasks, dayFilter));
   const title = dayFilter == null || dayFilter === "all" ? "全程路线" : "第 " + dayFilter + " 天";
   const days = listMapDays(rows);
   const legend =
@@ -216,15 +232,31 @@ function buildMapViewerHtml(tasks, dayFilter) {
     "L.polyline([ll(t.start),ll(t.end)],{color:color(t.day),weight:4,opacity:.85}).addTo(map);" +
     "bounds.push(ll(t.start),ll(t.end));}" +
     "});" +
-    "var n=0;" +
+    "var seen={};" +
     "TASKS.forEach(function(t){" +
-    "if(!t||t.type!=='poi'||!t.lnglat)return;" +
-    "n+=1;" +
+    "if(!t||t.type!=='poi'||!t.lnglat||!t.label)return;" +
+    "var k=Math.round(Number(t.lnglat[0])*1e4)+','+Math.round(Number(t.lnglat[1])*1e4);" +
+    "if(seen[k])return;" +
+    "seen[k]=1;" +
+    "var n=t.label;" +
     "var latlng=ll(t.lnglat);bounds.push(latlng);" +
     "var icon=L.divIcon({className:'pin',html:'<span style=\"background:'+color(t.day)+'\">'+n+'</span>',iconSize:[22,22],iconAnchor:[11,11]});" +
-    "L.marker(latlng,{icon:icon}).addTo(map).bindPopup('<b>'+n+'. '+(t.text||'未命名')+'</b><br>第'+(t.day||1)+'天<br>'+(t.remark||'')).bindTooltip((t.text||'未命名'),{direction:'top',offset:[0,-10]});" +
+    "L.marker(latlng,{icon:icon,zIndexOffset:1000-n}).addTo(map).bindPopup('<b>'+n+'. '+(t.text||'未命名')+'</b><br>第'+(t.day||1)+'天<br>'+(t.remark||'')).bindTooltip((t.text||'未命名'),{direction:'top',offset:[0,-10]});" +
     "});" +
     "if(bounds.length)map.fitBounds(bounds,{padding:[36,36],maxZoom:15});else map.setView([34.76,113.65],6);" +
     "</script></body></html>"
   );
 }
+
+function _checkPoiLabels() {
+  const labels = stampPoiLabels([
+    { type: "poi", lnglat: [116.3221, 39.8952], text: "北京西站" },
+    { type: "poi", lnglat: [116.397, 39.918], text: "故宫" },
+    { type: "poi", lnglat: [116.32214, 39.89518], text: "返回西站" },
+  ])
+    .filter((item) => item.type === "poi")
+    .map((item) => item.label);
+  if (labels.join(",") !== "1,2,1") throw new Error("poi labels " + labels.join(","));
+}
+
+if (typeof window === "undefined") _checkPoiLabels();

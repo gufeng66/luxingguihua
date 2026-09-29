@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from planner.async_utils import message_text, truncate, watch_aiter
+from planner.async_utils import message_text, ms_since, truncate, watch_aiter
 
 logger = logging.getLogger("travel_planner")
 
@@ -45,10 +45,6 @@ def _subagent_step_id(name: str | None) -> str | None:
     if name in ("summary_agent", "summary"):
         return "summary"
     return None
-
-
-def _ms_since(t0: float) -> int:
-    return int((time.monotonic() - t0) * 1000)
 
 
 async def iter_dispatch(
@@ -97,7 +93,7 @@ async def iter_dispatch(
         logger.warning("dispatch_timeout plan_id=%s", plan_id)
         yield {"type": "status", "message": "子智能体调度超时，将根据已有结果汇总"}
 
-    run.dispatch_ms = _ms_since(t_dispatch)
+    run.dispatch_ms = ms_since(t_dispatch)
     if cancel_event is not None and cancel_event.is_set():
         run.cancelled = True
     if run.cancelled:
@@ -113,7 +109,7 @@ async def iter_dispatch(
         if run.timed_out:
             extra["reason"] = "dispatch_timeout"
         if step_id in step_started:
-            extra["elapsed_ms"] = _ms_since(step_started[step_id])
+            extra["elapsed_ms"] = ms_since(step_started[step_id])
             if step_id == "map" and run.map_ms is None:
                 run.map_ms = extra["elapsed_ms"]
             if step_id == "ticket" and run.ticket_ms is None:
@@ -209,7 +205,7 @@ def _on_tools(
             step_id = _subagent_step_id(sub)
             if step_id and step_id in active_steps:
                 active_steps.discard(step_id)
-                elapsed = _ms_since(step_started.get(step_id, time.monotonic()))
+                elapsed = ms_since(step_started.get(step_id, time.monotonic()))
                 if step_id == "map":
                     run.map_ms = elapsed
                 if step_id == "ticket":

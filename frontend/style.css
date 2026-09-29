@@ -128,14 +128,6 @@ body {
   padding: 16px 20px 48px;
 }
 
-/* 副标题说明（若模板仍引用则保留） */
-.subtitle {
-  font-size: 15px;
-  color: #4a5c5a;
-  margin-bottom: 24px;
-  line-height: 1.6;
-}
-
 /* 输入卡片区域 */
 .panel {
   background: rgba(255, 255, 255, 0.88);
@@ -267,36 +259,6 @@ body {
   color: #0f3d38;
 }
 
-/* 过程时间线列表（旧结构兼容） */
-.timeline {
-  list-style: none;
-  margin-bottom: 20px;
-}
-
-.timeline li {
-  margin-bottom: 8px;
-  background: rgba(255, 255, 255, 0.75);
-  padding: 10px 12px;
-  border-radius: 8px;
-  border-left: 3px solid #2a9d8f;
-  font-size: 13px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.timeline li.type-subagent {
-  border-left-color: #2a6f97;
-}
-
-.timeline li.type-tool {
-  border-left-color: #c47a2c;
-}
-
-.timeline li.type-error {
-  border-left-color: #b23a48;
-}
-
 .char-count {
   margin-left: auto;
   font-size: 13px;
@@ -320,19 +282,6 @@ body {
   align-items: center;
   padding: 6px 10px;
   font-size: 12px;
-}
-
-.result-layout {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  align-items: start;
-}
-
-@media (max-width: 800px) {
-  .result-layout {
-    grid-template-columns: 1fr;
-  }
 }
 
 .result {
