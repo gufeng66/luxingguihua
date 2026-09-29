@@ -15,7 +15,7 @@ from typing import Any
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from slots import ExtractedSlots, TravelSlots, normalize_extracted
+from slots import ExtractedSlots, TravelSlots, _parse_today, normalize_extracted
 
 from planner.paths import WEEKDAYS
 from planner.prompts import SLOT_EXTRACT_PROMPT
@@ -43,9 +43,7 @@ async def extract_slots(
     today: date | str | None = None,
 ) -> TravelSlots:
     """结构化抽取旅行槽位；失败由调用方捕获并降级。"""
-    base = date.today() if today is None else (
-        today if isinstance(today, date) else date.fromisoformat(str(today)[:10])
-    )
+    base = _parse_today(today)
     prompt = SLOT_EXTRACT_PROMPT.format(
         today=base.isoformat(),
         weekday=WEEKDAYS[base.weekday()],
@@ -57,8 +55,6 @@ async def extract_slots(
             HumanMessage(content=query),
         ]
     )
-    if isinstance(result, ExtractedSlots):
-        return normalize_extracted(result, today=base)
-    if isinstance(result, dict):
-        return normalize_extracted(result, today=base)
-    return normalize_extracted(ExtractedSlots.model_validate(result), today=base)
+    if not isinstance(result, (ExtractedSlots, dict)):
+        result = ExtractedSlots.model_validate(result)
+    return normalize_extracted(result, today=base)

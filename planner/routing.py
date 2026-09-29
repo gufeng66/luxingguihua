@@ -53,8 +53,6 @@ _DATE_CHANGE = (
     "日期",
     "下周再",
     "改到周",
-    "提前到",
-    "推迟一天",
     "改明天",
     "改后天",
 )
@@ -132,8 +130,6 @@ def skip_ticket_reason(slots: TravelSlots | None, query: str) -> str | None:
         return "no_rail_intent"
     if slots is not None and is_same_city(slots.origin, slots.destination):
         return "intra_city"
-    if flags["drive"]:
-        return "no_rail_intent"
     return None
 
 
@@ -206,8 +202,6 @@ def classify_revision(
     copy_only = _has_any(text, _COPY_ONLY) and not _has_any(text, _ITINERARY)
     if copy_only:
         return "summary_only"
-    if _has_any(text, _ITINERARY) or len(text.strip()) > 0:
-        return "map_only"
     return "map_only"
 
 

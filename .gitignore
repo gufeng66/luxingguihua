@@ -29,6 +29,7 @@ workspace/results/snapshots/*
 !/results/.gitkeep
 
 # 日志与临时文件
+logs/
 *.log
 *.tmp
 *.temp
@@ -114,3 +115,7 @@ ehthumbs.db
 .specstory/
 .claude/
 .codex/
+.aone_copilot/
+.history/
+.trae/
+.qoder/

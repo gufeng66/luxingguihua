@@ -60,6 +60,7 @@ graph TD
 - Python **3.11+**（推荐 Conda）
 - Node.js **18+**（高德 Skill 脚本依赖）
 - DeepSeek API Key、高德 Web 服务 Key
+- 浏览器能访问 unpkg（Vue、marked、DOMPurify）。内网或离线打开首页会白屏
 
 ### 1. 克隆并安装 Python 依赖
 
@@ -70,7 +71,10 @@ cd 旅行规划多智能体
 conda create -n travel-planner python=3.11 -y
 conda activate travel-planner
 pip install -r requirements.txt
+pytest -q -m "not integration"
 ```
+
+先跑上面的 pytest，确认当前环境能过单元测试，再配密钥。
 
 ### 2. 安装高德 Skill 依赖
 
@@ -215,7 +219,7 @@ python app.py   # 交互输入
 │   ├── map.js              # 高德链接与路线预览
 │   └── style.css
 ├── amap-lbs-skill/         # 高德地图 Skill（Node，只读挂载）
-├── evals/                  # 单元 / 集成评测（说明见 evals/README.md）
+├── evals/                  # 单元 / 集成评测（checkers.py、cases.md，说明见 evals/README.md）
 ├── workspace/
 │   ├── config/memory/      # 智能体长期记忆
 │   └── results/            # 方案 md、maps/、snapshots/（内容 git 忽略，目录有 .gitkeep）
@@ -307,4 +311,4 @@ LANGSMITH_PROJECT=travel-planner
 
 ## License
 
-项目主体代码按仓库约定使用；`amap-lbs-skill/` 内另有其自身 LICENSE，请一并遵守。
+仓库根目录没有 `LICENSE`，主体代码的许可证尚未写明。`amap-lbs-skill/` 有自己的 LICENSE，请一并遵守。选定许可证后补一份根目录 `LICENSE`。

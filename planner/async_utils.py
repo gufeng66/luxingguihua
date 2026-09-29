@@ -66,7 +66,7 @@ async def watch_aiter(
             nxt.cancel()
             try:
                 await nxt
-            except (asyncio.CancelledError, StopAsyncIteration, Exception):
+            except (asyncio.CancelledError, Exception):
                 pass
         aclose = getattr(agen, "aclose", None)
         if aclose is not None:
@@ -110,5 +110,5 @@ async def watch_aiter(
                 nxt.cancel()
                 try:
                     await nxt
-                except (asyncio.CancelledError, StopAsyncIteration, Exception):
+                except (asyncio.CancelledError, Exception):
                     pass
