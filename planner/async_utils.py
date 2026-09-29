@@ -93,6 +93,9 @@ async def watch_aiter(
                 item = nxt.result()
             except StopAsyncIteration:
                 return
+            except asyncio.CancelledError:
+                await _close()
+                return
             yield item
             nxt = asyncio.create_task(agen.__anext__())
     finally:

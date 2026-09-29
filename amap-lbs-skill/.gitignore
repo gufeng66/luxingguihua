@@ -1,6 +1,10 @@
 .aone_copilot/rules/code-auto-collection.md
 node_modules/
 config.json
+large_tool_results/
+node_err.txt
+test_out.txt
+out.txt
 .env
 *.log
 .DS_Store

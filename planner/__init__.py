@@ -10,11 +10,13 @@
     pipeline.py     一次规划的事件流（stream_plan）
     dispatch.py     解析主智能体 astream（map/ticket 进度与原文）
     routing.py      要不要查票/出地图、修订走哪条路（纯函数）
+    map_agent.py    地图子智能体配置
+    ticket_agent.py 车票子智能体（MCP 连接）
+    ticket_cache.py 12306 MCP 连接缓存
     llm.py          建大模型、抽槽位
     prompts.py      主智能体系统提示
-    summary.py      流式成文 + 落盘 + 快照
-    ticket_cache.py 12306 MCP 连接缓存
-    backends.py     智能体看到的虚拟文件系统
+    summary.py      汇总提示、流式成文、落盘与快照
+    backends.py     智能体看到的虚拟文件系统与 shell
     async_utils.py  可取消、可超时的异步迭代
     paths.py        目录常量、Windows 编码、LangSmith 开关
 """

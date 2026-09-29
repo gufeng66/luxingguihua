@@ -139,8 +139,9 @@ class TravelSlots(BaseModel):
     budget: str | None = Field(default=None, max_length=64)
     preferences: str | None = Field(default=None, max_length=200)
     pace: str | None = Field(default=None, max_length=64)
+    lodging: str | None = Field(default=None, max_length=128)
 
-    @field_validator("origin", "destination", "budget", "preferences", "pace", mode="before")
+    @field_validator("origin", "destination", "budget", "preferences", "pace", "lodging", mode="before")
     @classmethod
     def _strip_empty(cls, v: Any) -> Any:
         """空字符串当成 None，避免『填了空白』误判为有值。"""
@@ -177,6 +178,7 @@ class ExtractedSlots(BaseModel):
     budget: str | None = None
     preferences: str | None = None
     pace: str | None = None
+    lodging: str | None = Field(default=None, max_length=128)
 
 
 def missing_critical(slots: TravelSlots | dict[str, Any] | None) -> list[str]:
@@ -244,20 +246,40 @@ def normalize_extracted(
     return TravelSlots.model_validate(data)
 
 
-def format_slots_for_prompt(slots: TravelSlots) -> str:
-    """把已确认槽位写成主智能体容易遵守的约束段落。"""
-    return "\n".join(
-        [
-            "【已确认的旅行约束，请严格遵守】",
-            f"- 出发地：{slots.origin}",
-            f"- 目的地：{slots.destination}",
-            f"- 出行日期：{slots.date}",
-            f"- 游玩天数：{slots.days}",
-            f"- 预算：{slots.budget}",
-            f"- 偏好：{slots.preferences}",
-            f"- 出行节奏：{slots.pace}",
+def lodging_route_rules(lodging: str | None, destination: str | None, rail: bool) -> str:
+    """有住宿地时生成闭环路线文案；空住宿地返回空串。"""
+    if not lodging or not str(lodging).strip():
+        return ""
+    lines = [
+        f"- 住宿地：{lodging}",
+        "【住宿地闭环路线规则】",
+        "1. 先用 amap poi-search 定位住宿地；每天都有一个住宿 POI（同一坐标、day 不同）",
+        "2. 每天路线从住宿地出发，最后一个景点之后回到住宿地",
+    ]
+    if rail:
+        lines += [
+            f"3. 第一天第一段：{destination}的车站 → 住宿地（先放行李）；车站优先用户点名的站，否则搜{destination}高铁站，不等查票结果",
+            "4. 最后一天：回到住宿地之后，再加一段 住宿地 → 车站",
         ]
-    )
+    return "\n".join(lines)
+
+
+def format_slots_for_prompt(slots: TravelSlots, *, rail: bool = False) -> str:
+    """把已确认槽位写成主智能体容易遵守的约束段落。"""
+    lines = [
+        "【已确认的旅行约束，请严格遵守】",
+        f"- 出发地：{slots.origin}",
+        f"- 目的地：{slots.destination}",
+        f"- 出行日期：{slots.date}",
+        f"- 游玩天数：{slots.days}",
+        f"- 预算：{slots.budget}",
+        f"- 偏好：{slots.preferences}",
+        f"- 出行节奏：{slots.pace}",
+    ]
+    rules = lodging_route_rules(slots.lodging, slots.destination, rail)
+    if rules:
+        lines.append(rules)
+    return "\n".join(lines)
 
 
 def should_clarify(slots: TravelSlots | None, *, slots_from_client: bool) -> bool:

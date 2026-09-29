@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from planner.async_utils import message_text, truncate, watch_aiter
-from planner.paths import dispatch_timeout_seconds
 
 logger = logging.getLogger("travel_planner")
 
@@ -58,8 +57,12 @@ async def iter_dispatch(
     cancel_event: asyncio.Event | None,
     plan_id: str,
     run: DispatchRun,
+    timeout_seconds: float | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """消费 main_agent.astream，边走边 yield 事件；结果写入 run。"""
+    """消费 main_agent.astream，边走边 yield 事件；结果写入 run。
+
+    timeout_seconds=None：一直等到流结束或客户端断开（需要 map 时用）。
+    """
     tool_call_to_subagent: dict[str, str] = {}
     active_steps: set[str] = set()
     step_started: dict[str, float] = {}
@@ -69,7 +72,7 @@ async def iter_dispatch(
         async for chunk in watch_aiter(
             agen,
             cancel_event,
-            timeout_seconds=dispatch_timeout_seconds(),
+            timeout_seconds=timeout_seconds,
         ):
             if cancel_event is not None and cancel_event.is_set():
                 run.cancelled = True

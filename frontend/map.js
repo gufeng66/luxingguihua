@@ -98,3 +98,133 @@ function escapeHtmlAttr(value) {
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;");
 }
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function taskDayHint(item) {
+  if (!item || typeof item !== "object") return 0;
+  const raw = item.day != null ? item.day : item.sort;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n >= 1) return Math.floor(n);
+  const m = String(raw || "").match(/(?:day|d|第)\s*(\d+)/i) || String(raw || "").match(/(\d+)\s*日/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+function assignTaskDays(tasks) {
+  if (!Array.isArray(tasks)) return [];
+  let current = 1;
+  return tasks.map((item) => {
+    const hinted = taskDayHint(item);
+    if (hinted >= 1) current = hinted;
+    return Object.assign({}, item, { day: current });
+  });
+}
+
+function listMapDays(tasks) {
+  const days = [];
+  for (const item of assignTaskDays(tasks)) {
+    if (!days.includes(item.day)) days.push(item.day);
+  }
+  return days.sort((a, b) => a - b);
+}
+
+function filterTasksByDay(tasks, day) {
+  const assigned = assignTaskDays(tasks);
+  if (day == null || day === "all") return assigned;
+  const n = Number(day);
+  return assigned.filter((item) => item.day === n);
+}
+
+function _lnglatOf(item) {
+  if (!item) return null;
+  if (item.type === "poi" && Array.isArray(item.lnglat) && item.lnglat.length >= 2) {
+    return [Number(item.lnglat[0]), Number(item.lnglat[1])];
+  }
+  return null;
+}
+
+function _pair(arr) {
+  if (!Array.isArray(arr) || arr.length < 2) return null;
+  const p = [Number(arr[0]), Number(arr[1])];
+  return Number.isFinite(p[0]) && Number.isFinite(p[1]) ? p : null;
+}
+
+function shortPoiName(text) {
+  const raw = String(text || "未命名").trim();
+  const cut = raw.split(/[（(｜|]/)[0].trim();
+  if (!cut) return raw.slice(0, 10);
+  return cut.length > 8 ? cut.slice(0, 8) + "…" : cut;
+}
+
+function dayColor(day) {
+  const palette = ["#2a9d8f", "#c47a2c", "#3d5a80", "#9b4d7a", "#c45c4a"];
+  const i = Math.max(1, Number(day) || 1) - 1;
+  return palette[i % palette.length];
+}
+
+function buildMapViewerHtml(tasks, dayFilter) {
+  const rows = filterTasksByDay(tasks, dayFilter);
+  const title = dayFilter == null || dayFilter === "all" ? "全程路线" : "第 " + dayFilter + " 天";
+  const days = listMapDays(rows);
+  const legend =
+    days.length > 1
+      ? days
+          .map(function (d) {
+            return '<span><i style="background:' + dayColor(d) + '"></i>第' + d + "天</span>";
+          })
+          .join("")
+      : "";
+  const json = JSON.stringify(rows);
+  return (
+    "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">" +
+    '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">' +
+    "<style>" +
+    "html,body{height:100%;margin:0;overscroll-behavior:contain;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif}" +
+    ".bar{display:flex;align-items:center;gap:12px;padding:8px 12px;background:#0f3d38;color:#f3faf8;font-size:13px}" +
+    ".bar strong{font-weight:600}" +
+    ".legend{display:flex;flex-wrap:wrap;gap:8px;font-size:12px;opacity:.92}" +
+    ".legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:3px}" +
+    "#map{height:calc(100% - 36px);width:100%}" +
+    ".pin{background:transparent;border:0}" +
+    ".pin span{display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;color:#fff;font-size:11px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.28)}" +
+    "</style></head><body>" +
+    '<div class="bar"><strong>' +
+    escapeHtml(title) +
+    "</strong><span class=\"legend\">" +
+    legend +
+    "</span><span style=\"margin-left:auto;opacity:.75\">滚轮缩放 · 拖动平移</span></div>" +
+    '<div id="map"></div>' +
+    '<script id="amapTaskData" type="application/json">' +
+    json +
+    "</script>" +
+    '<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>' +
+    "<script>" +
+    "var TASKS=JSON.parse(document.getElementById('amapTaskData').textContent||'[]');" +
+    "var COLORS=['#2a9d8f','#c47a2c','#3d5a80','#9b4d7a','#c45c4a'];" +
+    "function color(d){return COLORS[(Math.max(1,Number(d)||1)-1)%COLORS.length];}" +
+    "function ll(p){return [Number(p[1]),Number(p[0])];}" +
+    "var map=L.map('map',{zoomControl:true,scrollWheelZoom:true});" +
+    "L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',{subdomains:'1234',maxZoom:18,attribution:'高德地图'}).addTo(map);" +
+    "var bounds=[];" +
+    "TASKS.forEach(function(t){" +
+    "if(t&&t.type==='route'&&t.start&&t.end){" +
+    "L.polyline([ll(t.start),ll(t.end)],{color:color(t.day),weight:4,opacity:.85}).addTo(map);" +
+    "bounds.push(ll(t.start),ll(t.end));}" +
+    "});" +
+    "var n=0;" +
+    "TASKS.forEach(function(t){" +
+    "if(!t||t.type!=='poi'||!t.lnglat)return;" +
+    "n+=1;" +
+    "var latlng=ll(t.lnglat);bounds.push(latlng);" +
+    "var icon=L.divIcon({className:'pin',html:'<span style=\"background:'+color(t.day)+'\">'+n+'</span>',iconSize:[22,22],iconAnchor:[11,11]});" +
+    "L.marker(latlng,{icon:icon}).addTo(map).bindPopup('<b>'+n+'. '+(t.text||'未命名')+'</b><br>第'+(t.day||1)+'天<br>'+(t.remark||'')).bindTooltip((t.text||'未命名'),{direction:'top',offset:[0,-10]});" +
+    "});" +
+    "if(bounds.length)map.fitBounds(bounds,{padding:[36,36],maxZoom:15});else map.setView([34.76,113.65],6);" +
+    "</script></body></html>"
+  );
+}

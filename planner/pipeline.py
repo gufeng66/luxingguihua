@@ -28,18 +28,19 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
-from map_sub_agent import map_agent
+from planner.map_agent import map_agent
 from slots import (
     TravelSlots,
     apply_soft_defaults,
     format_slots_for_prompt,
+    lodging_route_rules,
     missing_critical,
     should_clarify,
 )
 
 from planner.backends import backend
 from planner.dispatch import DispatchRun, iter_dispatch
-from planner.paths import MAPS_DIR
+from planner.paths import MAPS_DIR, dispatch_timeout_seconds
 from planner.prompts import build_main_prompt
 from planner.routing import (
     classify_revision,
@@ -142,6 +143,9 @@ async def stream_plan(
 
         # —— 理解需求：抽槽位或沿用快照；缺关键字段则 clarify 后结束本轮 ——
         yield {
+            "type": "step",
+            "id": "understand",
+            "status": "active",
             **({"label": "修订需求"} if revision_kind else {}),
         }
         yield {"type": "status", "message": "正在理解需求…" if not revision_kind else "正在理解修改意见…"}
@@ -279,9 +283,16 @@ async def stream_plan(
             if tracing_on:
                 yield {"type": "status", "message": "本次规划已发送到 LangSmith 项目 travel-planner"}
 
+            map_prompt = str(map_agent["system_prompt"]).replace("{plan_id}", plan_id)
+            if confirmed is not None:
+                route_rules = lodging_route_rules(
+                    confirmed.lodging, confirmed.destination, need_ticket
+                )
+                if route_rules:
+                    map_prompt = map_prompt + "\n\n" + route_rules
             map_spec = {
                 **map_agent,
-                "system_prompt": str(map_agent["system_prompt"]).replace("{plan_id}", plan_id),
+                "system_prompt": map_prompt,
             }
             subagents: list[Any] = []
             if need_map:
@@ -309,9 +320,9 @@ async def stream_plan(
 
             user_content = query
             if confirmed is not None and not legacy_mode:
-                user_content = f"{query}\n\n{format_slots_for_prompt(confirmed)}"
+                user_content = f"{query}\n\n{format_slots_for_prompt(confirmed, rail=need_ticket)}"
             if revision_kind == "map_only":
-                user_content = f"修订意见：{query}\n请调整景点与路线。\n\n{format_slots_for_prompt(confirmed)}"
+                user_content = f"修订意见：{query}\n请调整景点与路线。\n\n{format_slots_for_prompt(confirmed, rail=need_ticket)}"
 
             run_config = {
                 "run_id": plan_uuid,
@@ -325,8 +336,13 @@ async def stream_plan(
             )
 
             dispatch = DispatchRun()
+            # ponytail: map 必须跑完；超时会 aclose 掉正在写 HTML 的 map_agent
             async for event in iter_dispatch(
-                agen, cancel_event=cancel_event, plan_id=plan_id, run=dispatch
+                agen,
+                cancel_event=cancel_event,
+                plan_id=plan_id,
+                run=dispatch,
+                timeout_seconds=None if need_map else dispatch_timeout_seconds(),
             ):
                 yield event
             cancelled = dispatch.cancelled
@@ -359,7 +375,7 @@ async def stream_plan(
             map_reason = resolve_map_state(
                 need_map=need_map,
                 dispatched=map_dispatched,
-                has_result=bool(dispatch.map_chunks) or map_file_now.is_file(),
+                has_result=map_file_now.is_file(),
                 timed_out=timed_out,
             )
             if map_reason == "missed":
@@ -381,7 +397,7 @@ async def stream_plan(
                 yield {
                     "type": "warning",
                     "code": "map_no_html",
-                    "message": "已调度 map_agent 但未拿到路线地图，汇总将标注暂缺",
+                    "message": "已调度 map_agent，但没有生成路线地图",
                 }
 
             if ticket_reason == "missed":
@@ -477,6 +493,10 @@ async def stream_plan(
         if trace_url:
             final_event["trace_url"] = trace_url
         yield final_event
+    except asyncio.CancelledError:
+        if cancel_event is not None and cancel_event.is_set():
+            return
+        raise
     except Exception as exc:
         if cancel_event is not None and cancel_event.is_set():
             return

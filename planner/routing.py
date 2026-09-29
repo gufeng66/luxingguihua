@@ -30,6 +30,14 @@ _NO_MAP = (
     "不用路线图",
     "不需要路线图",
     "无需路线图",
+    "不要找景点",
+    "不用找景点",
+    "不需要找景点",
+    "无需找景点",
+    "不要景点",
+    "不需要景点",
+    "不用搜景点",
+    "不搜景点",
 )
 
 _RAIL_POS = ("高铁", "动车", "12306", "车票", "坐火车", "乘火车", "火车去")
@@ -135,15 +143,10 @@ def needs_rail_ticket(slots: TravelSlots | None, query: str) -> bool:
 
 
 def skip_map_reason(query: str) -> str | None:
-    """用户明确不要路线地图时跳过；未说明则必须生成。"""
+    """用户明确不要地图或不要找景点时跳过；未说明则必须生成。"""
     if _has_any(query or "", _NO_MAP):
         return "user_no_map"
     return None
-
-
-def needs_route_map(query: str) -> bool:
-    """默认要出路线地图；用户明确拒绝才 False。"""
-    return skip_map_reason(query) is None
 
 
 def resolve_map_state(
@@ -153,7 +156,7 @@ def resolve_map_state(
     has_result: bool,
     timed_out: bool,
 ) -> MapState:
-    """ok > skipped > missed（未发 task）> timeout（已调度后超时）> incomplete（已调度无 HTML/正文）。"""
+    """ok > skipped > missed（未发 task）> timeout（已调度后超时）> incomplete（已调度但没有地图 HTML）。has_result 只认 HTML 落盘。"""
     if has_result:
         return "ok"
     if not need_map:

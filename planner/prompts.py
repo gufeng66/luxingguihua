@@ -82,7 +82,7 @@ REVISION_MAP_PATCH = """
 """
 
 SLOT_EXTRACT_PROMPT = """你是旅行需求槽位抽取器。今天是 {today}，星期{weekday}。
-从用户输入抽取字段：origin(出发地)、destination(目的地)、date、days、budget、preferences、pace。
+从用户输入抽取字段：origin(出发地)、destination(目的地)、date、days、budget、preferences、pace、lodging(住宿地：酒店/民宿/住址，未提及则 null)。
 规则：
 1. 用户未提及的字段填 null，不要猜测填充
 2. date：若是相对日期（明天/下周六等）请换算成 YYYY-MM-DD；已是具体日期则用 YYYY-MM-DD；无法确定则 null
@@ -155,5 +155,5 @@ def build_main_prompt(
         **common,
         rule_1="出发地、目的地、出行日期为关键约束：必须有据可查，禁止臆造",
         rule_2="游玩天数、预算、偏好、出行节奏以【已确认的旅行约束】为准（可含用户确认过的默认值），不要擅自改写",
-        slots_block=format_slots_for_prompt(slots),
+        slots_block=format_slots_for_prompt(slots, rail=need_ticket),
     )

@@ -32,6 +32,11 @@ if sys.platform == "win32":
         _locale.getencoding = lambda: "utf-8"  # type: ignore[method-assign]
 
 load_dotenv(find_dotenv())
+# poi-search.js 只认 AMAP_KEY；项目配置的是 AMAP_WEBSERVICE_KEY
+if not (os.getenv("AMAP_KEY") or "").strip():
+    _amap = (os.getenv("AMAP_WEBSERVICE_KEY") or "").strip()
+    if _amap:
+        os.environ["AMAP_KEY"] = _amap
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # 仓库根目录
 WORKSPACE_DIR = BASE_DIR / "workspace"
@@ -45,12 +50,12 @@ WEEKDAYS = "一二三四五六日"  # datetime.weekday() 0=周一 → 索引进�
 
 
 def dispatch_timeout_seconds() -> float:
-    """主智能体调度 map/ticket 的总超时（秒）。环境变量坏值则退回 180。"""
-    raw = (os.getenv("DISPATCH_TIMEOUT_SECONDS") or "180").strip()
+    """主智能体调度 map/ticket 的总超时（秒）。环境变量坏值则退回 360。"""
+    raw = (os.getenv("DISPATCH_TIMEOUT_SECONDS") or "360").strip()
     try:
         return max(1.0, float(raw))
     except ValueError:
-        return 180.0
+        return 360.0
 
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 MAPS_DIR.mkdir(parents=True, exist_ok=True)

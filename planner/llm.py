@@ -2,7 +2,7 @@
 大模型：建客户端 + 把用户一句话抽成 TravelSlots。
 
 【小白怎么理解？】
-    密钥走 OpenAI 兼容协议（DeepSeek 的 OPENAI_BASE_URL）。
+    密钥走 OpenAI 兼容协议（.env 的 OPENAI_BASE_URL）。
     extract_slots 失败不要在这里吞掉：pipeline 捕获后降级成「原模式规划」。
 """
 
@@ -22,13 +22,14 @@ from planner.prompts import SLOT_EXTRACT_PROMPT
 
 
 def build_llm():
-    """初始化 DeepSeek-V4.1-Flash（API 模型名：deepseek-flash）。"""
+    """初始化 Fit2Cloud 网关上的 f2c-deepseek-v4-flash。"""
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL")
     if not api_key:
-        raise RuntimeError("缺少 OPENAI_API_KEY。请复制 .env.example 为 .env 并填写 DeepSeek Key。")
+        raise RuntimeError("缺少 OPENAI_API_KEY。请复制 .env.example 为 .env 并填写 Key。")
     return init_chat_model(
-        model="deepseek-flash",
+        # model="deepseek-flash",
+        model="f2c-deepseek-v4-flash",
         model_provider="openai",
         api_key=api_key,
         base_url=base_url,
@@ -49,7 +50,7 @@ async def extract_slots(
         today=base.isoformat(),
         weekday=WEEKDAYS[base.weekday()],
     )
-    structured = llm.with_structured_output(ExtractedSlots)
+    structured = llm.with_structured_output(ExtractedSlots, method="json_mode")
     result = await structured.ainvoke(
         [
             SystemMessage(content=prompt),

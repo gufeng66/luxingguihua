@@ -128,6 +128,7 @@ def test_resolve_ticket_state_priority() -> None:
 def test_skip_map_and_resolve_map_state() -> None:
     assert skip_map_reason("郑州一日游") is None
     assert skip_map_reason("郑州玩，不要地图") == "user_no_map"
+    assert skip_map_reason("郑州玩，不要找景点") == "user_no_map"
     assert (
         resolve_map_state(need_map=True, dispatched=True, has_result=True, timed_out=True)
         == "ok"

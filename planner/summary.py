@@ -19,13 +19,22 @@ from uuid import UUID
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from slots import TravelSlots, format_slots_for_prompt
-from summary_sub_agent import SUMMARY_AGENT_PROMPT
 
 from planner.async_utils import message_text
 from planner.paths import RESULTS_DIR, SNAPSHOTS_DIR
 from planner.routing import TicketState, MapState
 
-SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+SUMMARY_AGENT_PROMPT = """
+你是一名旅行方案汇总助手。
+你不负责外部查询，只负责整理结果。
+
+规则：
+1. 将景点方案与车票方案合并
+2. 输出最终推荐方案、备选方案、预算估算
+3. 必须按以下六个章节标题输出（使用 Markdown ## 标题）：需求摘要、景点建议、车票建议、预算、行程表、注意事项
+4. 保持简洁，不重复原始数据
+5. 若某一路结果标注暂缺或服务不可用：对应章节如实说明，禁止编造车次号、票价、发车时刻或未检索到的景点细节
+"""
 
 
 def ticket_summary_block(
@@ -81,8 +90,8 @@ def map_summary_block(map_reason: MapState, map_context: str) -> str:
         )
     if map_reason == "incomplete":
         return (
-            "（map_agent 已调度但未拿到路线地图 HTML 或检索正文。"
-            "景点建议请说明地图暂缺，禁止编造具体景点细节。）"
+            "（map_agent 已调度但没有生成路线地图 HTML。正文即使有内容也不得当作本次景点方案。"
+            "景点建议请说明地图未生成，禁止编造具体景点细节。）"
         )
     return "（本应检索景点但未调度 map_agent。请标注暂缺，不要编造具体景点细节。）"
 
@@ -173,7 +182,11 @@ async def stream_summary(
     revision_forbid_old_tickets: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     """流式生成最终 Markdown。对外 yield token；最后一帧 _summary_done 仅给 pipeline 收全文。"""
-    slots_text = format_slots_for_prompt(slots) if slots is not None else "（槽位未结构化确认，请根据用户原话理解）"
+    slots_text = (
+        format_slots_for_prompt(slots, rail=ticket_reason != "skipped")
+        if slots is not None
+        else "（槽位未结构化确认，请根据用户原话理解）"
+    )
     map_block = map_summary_block(map_reason, map_context)
     ticket_block = ticket_summary_block(ticket_reason, ticket_context)
     parts = [

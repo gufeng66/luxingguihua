@@ -44,7 +44,7 @@ graph TD
 
 | 组件 | 职责 |
 |------|------|
-| `main_agent` | 按已确认槽位调度 map / ticket（模型：DeepSeek `deepseek-flash`） |
+| `main_agent` | 按已确认槽位调度 map / ticket（模型：Fit2Cloud `f2c-deepseek-v4-flash`） |
 | HITL | critical 槽位齐全才继续；soft 槽位可默认 |
 | `map_agent` | 景点 / 路线 / 地图 |
 | `ticket_agent` | 车次 / 票价；同城或明确自驾等可不查票 |
@@ -94,13 +94,13 @@ cp .env.example .env
 
 | 服务 | 申请入口 | 环境变量 |
 |------|----------|----------|
-| DeepSeek | https://platform.deepseek.com/ | `OPENAI_API_KEY`、`OPENAI_BASE_URL=https://api.deepseek.com` |
+| Fit2Cloud | https://ai.fit2cloud.cn/gateway/v1 | `OPENAI_API_KEY`、`OPENAI_BASE_URL=https://ai.fit2cloud.cn/gateway/v1`（模型 `f2c-deepseek-v4-flash`） |
 | 高德 Web 服务 | https://lbs.amap.com/api/webservice/create-project-and-key | `AMAP_WEBSERVICE_KEY` |
 | LangSmith（可选） | https://smith.langchain.com | `LANGSMITH_API_KEY`、`LANGSMITH_PROJECT=travel-planner` |
 
 也可把高德 Key 写入 `amap-lbs-skill/config.json`（由 `config.example.json` 复制），该文件已被 gitignore。
 
-12306 MCP 默认使用公开的 ModelScope 地址，可用环境变量 `MCP_12306_URL` 覆盖（见 `ticket_sub_agent.py`）。
+12306 MCP 默认使用公开的 ModelScope 地址，可用环境变量 `MCP_12306_URL` 覆盖（见 `planner/ticket_agent.py`）。
 
 ### 4. 启动
 
@@ -128,7 +128,7 @@ python app.py   # 交互输入
 
 ## 演示
 
-现场建议固定跑这几条（出发地/出行方式都写在用户话里，不依赖画像）。Web 首页 chips 与下列剧本一一对应，可一键填入。
+现场建议固定跑这几条（出发地/出行方式都写在用户话里，不依赖画像）。Web 首页 chips 与下列剧本一一对应：点「跨城高铁」「租电车自驾」「MCP 降级」「修订方案」会填入需求并展示一份写好的详细示例；点「开始规划」才真实查询。HITL 只填入缺信息的短句。
 
 1. **跨城高铁（并行）**：`这周六从新乡坐高铁去郑州一日游，预算 500，少折腾` — 看 map 与 ticket 同超步发出。
 2. **省内租电车自驾**：`下周从新乡租电车自驾去洛阳两天，轻松点，别安排开封和宝泉` — ticket `skipped`，方案考虑续航/充电。
@@ -140,7 +140,7 @@ python app.py   # 交互输入
 
 ### 耗时预算
 
-`DISPATCH_TIMEOUT_SECONDS`（默认 180）**只覆盖**主智能体 `astream`，不含 MCP 连接。MCP 最坏约 15s × 2 次重试；TTL 300s 内第二次规划会命中车票工具缓存（`ticket_cache_hit`）。最坏总时长 ≈ MCP + 180 + 汇总生成。并行只自证「同超步发出两个 task」，不承诺总耗时减半。路线地图：用户未说「不要地图」时必须生成 HTML；调度超时不再误报成「未调度 map_agent」。
+`DISPATCH_TIMEOUT_SECONDS`（默认 360）只在**不需要地图**时限制主智能体 `astream`。需要找景点时一直等到 map 写完或浏览器断开。MCP 最坏约 15s × 2 次重试；TTL 300s 内第二次规划会命中车票工具缓存（`ticket_cache_hit`）。并行只自证「同超步发出两个 task」，不承诺总耗时减半。仅用户明确说不要地图/不要找景点时跳过 map。
 
 快照在 `workspace/results/snapshots/`（已 gitignore）。**不做自动 LRU**；目录膨胀时本地手动清理即可。
 
@@ -192,29 +192,25 @@ python app.py   # 交互输入
 ```text
 旅行规划多智能体/
 ├── planner_service.py      # 对外 API（CLI / Web / 测试入口）
-├── planner/                # 规划核心拆分
-│   ├── paths.py            # 路径、编码、LangSmith
-│   ├── backends.py         # 虚拟文件系统（skill 只读）
-│   ├── prompts.py          # 主智能体提示词
-│   ├── llm.py              # 模型初始化与槽位抽取
-│   ├── routing.py          # 查票路由与票务五态
-│   ├── ticket_cache.py     # 车票 MCP TTL 缓存与三态
-│   ├── async_utils.py      # 可取消异步迭代
+├── planner/                # 规划实现（改逻辑看这里）
+│   ├── pipeline.py         # 一次规划的事件流
+│   ├── dispatch.py         # 主智能体 astream → SSE 进度
+│   ├── routing.py          # 查票 / 出地图 / 修订路由
+│   ├── map_agent.py        # 地图子智能体
+│   ├── ticket_agent.py     # 车票子智能体（12306 MCP）
+│   ├── ticket_cache.py     # MCP 连接缓存
 │   ├── summary.py          # 汇总成文与落盘
-│   └── pipeline.py         # stream_plan 流水线
-├── slots.py                # 槽位模型与相对日期解析（纯函数）
+│   ├── prompts.py          # 主智能体提示词
+│   ├── llm.py              # 模型与槽位抽取
+│   ├── backends.py         # 虚拟文件系统与 shell
+│   ├── async_utils.py      # 可取消、可超时的异步迭代
+│   └── paths.py            # 路径、编码、LangSmith
+├── slots.py                # 槽位模型与相对日期解析
 ├── app.py                  # CLI 入口
 ├── server.py               # FastAPI + SSE
-├── frontend/               # Vue3 CDN 单页
-│   ├── index.html          # 页面结构
-│   ├── app.js              # SSE / 确认卡逻辑
-│   └── style.css
-├── map_sub_agent.py        # 地图子智能体配置
-├── ticket_sub_agent.py     # 车票子智能体（MCP 懒加载）
-├── summary_sub_agent.py    # 汇总提示词
-├── amap-lbs-skill/         # 高德地图 Skill（Node）
+├── frontend/               # 页面：index.html 结构，app.js 交互，map.js 高德链接
+├── amap-lbs-skill/         # 高德地图 Skill（Node，只读挂载）
 ├── evals/                  # 单元 / 集成评测
-├── reference/travel_agent/ # 参考实现，非运行路径
 ├── workspace/
 │   ├── config/memory/      # 智能体长期记忆
 │   └── results/maps/       # 运行产物（git 忽略内容）
@@ -224,7 +220,7 @@ python app.py   # 交互输入
 └── README.md
 ```
 
-`reference/travel_agent/` 是早期样板，**参考实现，非运行路径**。运行入口仍是 `server.py` / `app.py` 与根目录 `amap-lbs-skill/`。
+运行入口是 `server.py` / `app.py`。规划逻辑在 `planner/`，高德脚本在 `amap-lbs-skill/`。
 
 ---
 

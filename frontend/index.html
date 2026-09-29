@@ -13,7 +13,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>旅游规划多智能体</title>
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/style.css?v=sample" />
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://unpkg.com/marked@15.0.7/marked.min.js"></script>
   <script src="https://unpkg.com/dompurify@3.2.6/dist/purify.min.js"></script>
@@ -56,7 +56,7 @@
         <h2 class="section-title">请确认旅行参数</h2>
         <p class="clarify-hint">标红项为关键信息，补全后才能继续；灰色标注为未提供时的默认值，可直接改或点继续。</p>
         <div class="clarify-grid">
-          <label v-for="key in ['origin','destination','date','days','budget','preferences','pace']" :key="key"
+          <label v-for="key in ['origin','destination','lodging','date','days','budget','preferences','pace']" :key="key"
             :class="{ 'is-critical-missing': isCriticalMissing(key) }">
             <span class="field-label">
               {{ slotLabel(key) }}
@@ -175,6 +175,7 @@
                 ref="resultBody"
                 @scroll="onResultScroll"
               >
+                <p class="sample-note" v-if="sampleNote && finalText">{{ sampleNote }}</p>
                 <div class="result markdown-body" v-if="finalText" v-html="renderedHtml"></div>
                 <p class="empty" v-else-if="errorText">{{ errorText }}</p>
                 <div class="result-empty" v-else-if="loading">
@@ -203,6 +204,26 @@
 
             <div class="map-pane" ref="mapPane" v-show="resultTab === 'map'">
               <div class="map-toolbar" v-if="mapUrl">
+                <div class="map-days" v-if="mapDays.length > 1" role="tablist" aria-label="按天查看路线">
+                  <button
+                    type="button"
+                    class="map-day-btn"
+                    role="tab"
+                    :class="{ 'is-active': mapDayFilter === 'all' }"
+                    :aria-selected="mapDayFilter === 'all' ? 'true' : 'false'"
+                    @click="setMapDay('all')"
+                  >全程</button>
+                  <button
+                    v-for="day in mapDays"
+                    :key="day"
+                    type="button"
+                    class="map-day-btn"
+                    role="tab"
+                    :class="{ 'is-active': mapDayFilter === day }"
+                    :aria-selected="mapDayFilter === day ? 'true' : 'false'"
+                    @click="setMapDay(day)"
+                  >第{{ day }}天</button>
+                </div>
                 <button type="button" class="btn btn-ghost" @click="openAmapPreview">高德预览</button>
                 <button v-if="amapAppUrl" type="button" class="btn btn-ghost" @click="openAmapApp">高德App看首站</button>
                 <button type="button" class="btn btn-ghost" @click="toggleMapFullscreen">{{ mapFullscreen ? "退出全屏" : "全屏" }}</button>
@@ -213,7 +234,17 @@
                 allow-popups-to-escape-sandbox 让弹出的高德页不要继承沙箱，否则高德脚本可能无法运行。
               -->
               <iframe
-                v-if="mapUrl"
+                v-if="mapUrl && mapViewerHtml"
+                class="map-frame"
+                ref="mapFrame"
+                :srcdoc="mapViewerHtml"
+                sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+                referrerpolicy="no-referrer"
+                title="路线地图"
+                @load="onMapFrameLoad"
+              ></iframe>
+              <iframe
+                v-else-if="mapUrl"
                 class="map-frame"
                 ref="mapFrame"
                 :src="mapUrl"
@@ -222,14 +253,14 @@
                 title="路线地图"
                 @load="onMapFrameLoad"
               ></iframe>
-              <p class="empty" v-else>本次未生成路线地图</p>
+              <p class="empty" v-else>{{ warningText || "本次未生成路线地图" }}</p>
             </div>
           </div>
         </section>
       </div>
     </div>
   </div>
-  <script src="/map.js"></script>
-  <script src="/app.js"></script>
+  <script src="/map.js?v=sample"></script>
+  <script src="/app.js?v=lodging"></script>
 </body>
 </html>

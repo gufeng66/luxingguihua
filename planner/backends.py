@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
+from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend
 from deepagents.backends.protocol import (
     PERMISSION_DENIED,
     DeleteResult,
@@ -61,8 +61,9 @@ class ReadOnlyBackend:
         return self.upload_files(files, *args, **kwargs)
 
 
+# ponytail: host shell, no sandbox. StateBackend has no execute, so map_agent never ran node and always hit the dispatch timeout. cwd is the skill dir so `node scripts/...` matches SKILL.md.
 backend = CompositeBackend(
-    default=StateBackend(),
+    default=LocalShellBackend(root_dir=str(SKILL_DIR), inherit_env=True),
     routes={
         "/workspace/results/": FilesystemBackend(root_dir=str(RESULTS_DIR), virtual_mode=True),
         "/workspace/config/": FilesystemBackend(root_dir=str(CONFIG_DIR), virtual_mode=True),

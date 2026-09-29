@@ -89,6 +89,9 @@ async def test_stream_plan_driving_skips_ticket_step(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(ps, "stream_summary", fake_summary)
 
     events = [ev async for ev in ps.stream_plan("杭州自驾逛西湖，不坐火车")]
+    understand = next(e for e in events if e.get("type") == "step" and e.get("id") == "understand")
+    assert understand["status"] == "active"
+    assert "label" not in understand
     subagents = [e.get("name") for e in events if e.get("type") == "subagent"]
     assert "ticket_agent" not in subagents
     assert "map_agent" in subagents
@@ -156,6 +159,7 @@ async def test_stream_plan_parallel_map_ticket_steps(monkeypatch: pytest.MonkeyP
 
     async def fake_summary(**kwargs):
         assert kwargs.get("ticket_reason") == "ok"
+        assert kwargs.get("map_reason") == "incomplete"
         yield {"type": "_summary_done", "content": "ok"}
 
     monkeypatch.setattr(ps, "stream_summary", fake_summary)
@@ -191,6 +195,8 @@ async def test_stream_plan_parallel_map_ticket_steps(monkeypatch: pytest.MonkeyP
     finals = [e for e in events if e.get("type") == "final"]
     assert finals
     assert finals[0].get("timings", {}).get("parallel_dispatch") is True
+    assert "map_url" not in finals[0]
+    assert any(e.get("code") == "map_no_html" for e in events)
 
 
 @pytest.mark.asyncio
@@ -260,6 +266,20 @@ async def test_watch_aiter_timeout_closes() -> None:
         async for _ in watch_aiter(gen(), timeout_seconds=0.15):
             pass
     assert closed["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_watch_aiter_cancelled_stops_clean() -> None:
+    import asyncio
+
+    from planner.async_utils import watch_aiter
+
+    async def gen():
+        yield 1
+        raise asyncio.CancelledError()
+
+    items = [x async for x in watch_aiter(gen())]
+    assert items == [1]
 
 
 @pytest.mark.asyncio
@@ -336,10 +356,13 @@ async def test_map_only_revision_skips_extract_and_ticket(monkeypatch: pytest.Mo
     ]
     extract_mock.assert_not_called()
     ticket_mock.assert_not_called()
+    understand = next(e for e in events if e.get("type") == "step" and e.get("id") == "understand")
+    assert understand["label"] == "修订需求"
+    assert understand["status"] == "active"
 
 
 @pytest.mark.asyncio
-async def test_stream_plan_map_timeout_not_missed(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stream_plan_need_map_ignores_dispatch_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
@@ -369,21 +392,27 @@ async def test_stream_plan_map_timeout_not_missed(monkeypatch: pytest.MonkeyPatc
                 ]
             }
         }
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.4)
+        yield {
+            "tools": {
+                "messages": [_fake_tool_message(content="已写地图 HTML", tool_call_id="m1")]
+            }
+        }
 
     agent = MagicMock()
     agent.astream = fake_astream
     monkeypatch.setattr(ps, "create_deep_agent", lambda **_k: agent)
 
     async def fake_summary(**kwargs):
-        assert kwargs.get("map_reason") == "timeout"
+        assert kwargs.get("map_reason") in ("ok", "incomplete")
         yield {"type": "_summary_done", "content": "ok"}
 
     monkeypatch.setattr(ps, "stream_summary", fake_summary)
     events = [ev async for ev in ps.stream_plan("这周六从新乡坐高铁去郑州一日游")]
-    assert any(e.get("type") == "warning" and e.get("code") == "map_dispatch_timeout" for e in events)
+    assert not any(e.get("code") == "map_dispatch_timeout" for e in events)
     assert not any(e.get("code") == "map_not_dispatched" for e in events)
     map_steps = [e for e in events if e.get("type") == "step" and e.get("id") == "map"]
-    assert any(e.get("status") == "skipped" and e.get("reason") == "dispatch_timeout" for e in map_steps)
+    assert any(e.get("status") == "done" for e in map_steps)
+    assert not any(e.get("reason") == "dispatch_timeout" for e in map_steps)
     assert any(e.get("type") == "final" for e in events)
 

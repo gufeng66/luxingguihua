@@ -28,6 +28,8 @@ from evals.checkers import (  # noqa: E402
 from slots import (  # noqa: E402
     TravelSlots,
     apply_soft_defaults,
+    format_slots_for_prompt,
+    lodging_route_rules,
     missing_critical,
     resolve_relative_date,
     should_clarify,
@@ -75,6 +77,36 @@ def test_client_slots_complete_no_reclarify() -> None:
 def test_client_slots_still_missing_critical_clarifies() -> None:
     slots = TravelSlots(origin="杭州", destination="苏州")  # date 缺
     assert should_clarify(slots, slots_from_client=True) is True
+
+
+def test_lodging_empty_is_none_and_not_critical() -> None:
+    slots = TravelSlots(origin="杭州", destination="苏州", date="2026-09-26", lodging="  ")
+    assert slots.lodging is None
+    assert missing_critical(slots) == []
+    assert lodging_route_rules(None, "苏州", True) == ""
+    assert lodging_route_rules("  ", "苏州", True) == ""
+
+
+def test_lodging_route_rules_loop_and_rail() -> None:
+    loop = lodging_route_rules("平江路亚朵", "苏州", False)
+    assert "从住宿地出发" in loop
+    assert "回到住宿地" in loop
+    assert "放行李" not in loop
+    assert "车站" not in loop
+
+    rail = lodging_route_rules("平江路亚朵", "苏州", True)
+    assert "放行李" in rail
+    assert "回到住宿地之后" in rail
+    assert "住宿地 → 车站" in rail
+
+
+def test_format_slots_without_rail_unchanged_when_no_lodging() -> None:
+    slots = TravelSlots(origin="杭州", destination="苏州", date="2026-09-26", days=1)
+    text = format_slots_for_prompt(slots)
+    assert "住宿地闭环" not in text
+    assert "出发地：杭州" in text
+    with_rail = format_slots_for_prompt(slots, rail=True)
+    assert with_rail == text
 
 
 def test_resolve_tomorrow() -> None:
@@ -211,9 +243,10 @@ def test_main_prompt_requires_parallel_and_intent_priority() -> None:
 
 
 def test_map_agent_prompt_amap_task_data_contract() -> None:
-    from map_sub_agent import MAP_AGENT_PROMPT
+    from planner.map_agent import MAP_AGENT_PROMPT
 
     assert "amapTaskData" in MAP_AGENT_PROMPT
+    assert '"day":1' in MAP_AGENT_PROMPT or "day\":1" in MAP_AGENT_PROMPT
     assert "application/json" in MAP_AGENT_PROMPT
     assert "overscroll-behavior" in MAP_AGENT_PROMPT
     assert "encodeURIComponent" in MAP_AGENT_PROMPT
@@ -227,5 +260,64 @@ def test_map_iframe_sandbox_allows_amap_popups() -> None:
     assert "allow-popups" in html
     assert "allow-popups-to-escape-sandbox" in html
     assert 'sandbox="allow-scripts allow-same-origin"' not in html
+    assert "map-days" in html
+    assert "setMapDay" in html
+
+
+@pytest.mark.asyncio
+async def test_ticket_cache_single_handshake_and_fail_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """并发只握手一次；失败后冷却期内不再连 MCP。"""
+    import asyncio
+
+    import planner.ticket_cache as tc
+
+    tc._ticket_cache = None
+    tc._fail_until = 0.0
+    calls = 0
+    spec = {"name": "ticket_agent"}
+
+    async def ok_build():
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.05)
+        return spec, object()
+
+    monkeypatch.setattr(tc, "build_ticket_agent", ok_build)
+    first, second = await asyncio.gather(tc.get_ticket_agent(), tc.get_ticket_agent())
+    assert first is spec and second is spec
+    assert calls == 1
+
+    async def down():
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("mcp down")
+
+    tc._ticket_cache = None
+    monkeypatch.setattr(tc, "build_ticket_agent", down)
+    assert await tc.get_ticket_agent() is None
+    assert await tc.get_ticket_agent() is None
+    assert calls == 2
+    assert tc.last_lookup()["connect_ms"] == 0.0
+    tc._ticket_cache = None
+    tc._fail_until = 0.0
+
+
+@pytest.mark.asyncio
+async def test_extract_slots_uses_json_mode() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from planner.llm import extract_slots
+    from slots import ExtractedSlots
+
+    llm = MagicMock()
+    structured = MagicMock()
+    structured.ainvoke = AsyncMock(
+        return_value=ExtractedSlots(origin="杭州", destination="苏州", date="2026-09-26")
+    )
+    llm.with_structured_output = MagicMock(return_value=structured)
+    slots = await extract_slots("杭州去苏州", llm, today="2026-09-21")
+    assert slots.origin == "杭州"
+    llm.with_structured_output.assert_called_once()
+    assert llm.with_structured_output.call_args.kwargs["method"] == "json_mode"
 
 

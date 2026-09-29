@@ -10,7 +10,7 @@
 4. `timed_out` → `timeout`
 5. 否则 → `missed`
 
-车票建议章节必须出现；无票态禁止在该节出现车次号。
+
 
 ## 路由 CASES
 
@@ -30,8 +30,8 @@
 - 跨城但 MCP 失败：`unavailable`，关键词「不可用」
 - 已挂载只调 map：`missed` + warning `ticket_not_dispatched`，关键词「未调度」
 - dispatch 超时无 ticket chunk：`timeout`，关键词「超时」
-- map 已发 task 但超时无 HTML：`timeout` + `map_dispatch_timeout`，不得写成「未调度 map_agent」
-- 用户说「不要地图」：跳过 map，不生成 HTML
+- 需要找景点时调度不设超时，等 map 写完或客户端断开；不得因 `DISPATCH_TIMEOUT` 标成跳过
+- 用户说「不要地图」或「不要找景点」：跳过 map，不生成 HTML
 - 修订 map_only：不调用 `extract_slots` / `get_ticket_agent`；票务态 `reused` 或 `skipped`
 - `plan_id=../../.env`：error，不读盘
 
