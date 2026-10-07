@@ -1,8 +1,8 @@
 # 旅游规划多智能体
 
-用最少工程复杂度演示 **DeepAgents + Skill + MCP + 多智能体协作**：
+用户输入一句自然语言旅游需求，系统完成 **景点筛选 / 路线地图 / 12306 车票建议 / 最终方案汇总**。
 
-用户输入一句自然语言旅游需求，系统自动完成 **景点筛选 / 路线地图 / 12306 车票建议 / 最终方案汇总**。
+架构说明见 [ARCHITECTURE.md](ARCHITECTURE.md)。评测怎么跑、哪些数字还没填，见 [EVALS.md](EVALS.md)。
 
 支持两种入口，共用同一套规划核心：
 
@@ -19,7 +19,8 @@
 - **人机确认（HITL）**：出发地 / 目的地 / 日期缺失时弹出确认卡；软字段可预填默认值
 - **地图子智能体**：挂载本地高德 Skill，推荐景点、规划路线、生成地图 HTML
 - **车票子智能体**：经 12306 MCP 查车次与票价；不可用时降级，**禁止编造票务**
-- **流式汇总**：按固定六章节输出 Markdown，前端打字机展示
+- **流式汇总**：按固定六章节输出 Markdown；落盘前校验章节，无可靠票务时禁止车次号，失败重试一次，仍失败则降级
+- **用量**：`final.timings` 含 `prompt_tokens`、`completion_tokens`、`cost_usd`（单价见 `.env.example`，未设置时成本为 0）
 - **产物落盘**：方案写入 `workspace/results/`，地图写入 `workspace/results/maps/{plan_id}.html`
 - **可选 LangSmith**：过程可视化追踪
 
@@ -60,7 +61,7 @@ graph TD
 - Python **3.11+**（推荐 Conda）
 - Node.js **18+**（高德 Skill 脚本依赖）
 - DeepSeek API Key、高德 Web 服务 Key
-- 浏览器能访问 unpkg（Vue、marked、DOMPurify）。内网或离线打开首页会白屏
+- 前端脚本在 `frontend/vendor/`，打开首页不依赖 unpkg
 
 ### 1. 克隆并安装 Python 依赖
 
@@ -102,7 +103,7 @@ cp .env.example .env
 | 高德 Web 服务 | https://lbs.amap.com/api/webservice/create-project-and-key | `AMAP_WEBSERVICE_KEY` |
 | LangSmith（可选） | https://smith.langchain.com | `LANGSMITH_TRACING`、`LANGSMITH_API_KEY`、`LANGSMITH_PROJECT=travel-planner`；自动链接失败时再填 `LANGSMITH_ORG_ID` |
 
-同文件里还有：`CORS_ORIGINS`（默认同源 `127.0.0.1:8000`）、`MCP_12306_URL`（不填用公开地址）、`DISPATCH_TIMEOUT_SECONDS`（默认 360，只限制不需要地图时的主智能体）。
+同文件里还有：`CORS_ORIGINS`（默认同源 `127.0.0.1:8000`）、`MCP_12306_URL`（不填用公开地址）、`DISPATCH_TIMEOUT_SECONDS`（默认 360，只限制不需要地图时的主智能体）、`PLAN_RATE_PER_MINUTE`（默认每分钟 8 次）、`PLAN_API_KEY`（设置后 `POST /api/plan` 要求请求头 `X-API-Key`）、`TOKEN_USD_PER_M_IN` / `TOKEN_USD_PER_M_OUT`（每百万 token 美元单价，用于 `cost_usd`）。
 
 也可把高德 Key 写入 `amap-lbs-skill/config.json`（由 `config.example.json` 复制），该文件已被 gitignore。`MCP_12306_URL` 的默认地址在 `planner/ticket_agent.py`。
 
@@ -130,9 +131,9 @@ python app.py   # 交互输入
 
 ---
 
-## 演示
+## 端到端验收场景
 
-现场建议固定跑这几条（出发地/出行方式都写在用户话里，不依赖画像）。Web 首页 chips 与下列剧本一一对应：点「跨城高铁」「租电车自驾」「MCP 降级」「修订方案」会填入需求并展示一份写好的详细示例；点「开始规划」才真实查询。HITL 只填入缺信息的短句。
+Web 首页 chips 与下列场景一一对应：点「跨城高铁」「租电车自驾」「MCP 降级」「修订方案」会填入需求并展示一份写好的详细示例；点「开始规划」才真实查询。HITL 只填入缺信息的短句。出发地和出行方式写在用户话里。
 
 1. **跨城高铁（并行）**：`这周六从新乡坐高铁去郑州一日游，预算 500，少折腾` — 看 map 与 ticket 同超步发出。
 2. **省内租电车自驾**：`下周从新乡租电车自驾去洛阳两天，轻松点，别安排开封和宝泉` — ticket `skipped`，方案考虑续航/充电。
@@ -144,7 +145,7 @@ python app.py   # 交互输入
 
 ### 耗时预算
 
-`DISPATCH_TIMEOUT_SECONDS`（默认 360）只在**不需要地图**时限制主智能体 `astream`。需要找景点时一直等到 map 写完或浏览器断开。MCP 最坏约 15s × 2 次重试；TTL 300s 内第二次规划会命中车票工具缓存（`ticket_cache_hit`）。并行只自证「同超步发出两个 task」，不承诺总耗时减半。仅用户明确说不要地图/不要找景点时跳过 map。
+`DISPATCH_TIMEOUT_SECONDS`（默认 360）只在**不需要地图**时限制主智能体 `astream`。需要找景点时一直等到 map 写完或浏览器断开。MCP 最坏约 15s × 2 次重试；TTL 300s 内第二次规划会命中车票工具缓存（`ticket_cache_hit`）。并行只自证「同超步发出两个 task」，没有与串行对照的实测耗时。仅用户明确说不要地图/不要找景点时跳过 map。
 
 快照在 `workspace/results/snapshots/`（已 gitignore）。**不做自动 LRU**；目录膨胀时本地手动清理即可。
 
@@ -173,7 +174,7 @@ python app.py   # 交互输入
 | `clarify` | `slots`, `missing`, `defaults_applied`, `message` | 等人确认（仅 critical 缺失） |
 | `step` | `id`, `status`, `elapsed_ms?`, `reason?`, `label?` | `understand` / `ticket` / `map` / `summary`；`skipped` 不带 `elapsed_ms`；`reason` 如 `no_rail_intent` / `mcp_unavailable` / `not_dispatched` |
 | `warning` | `code`, `message` | 漏调度 map/ticket 等护栏 |
-| `final` | `content`, `saved_url`, `plan_id`, `timings`, `map_url?`, `trace_url?` | 完整方案、耗时与产物链接 |
+| `final` | `content`, `saved_url`, `plan_id`, `timings`, `map_url?`, `trace_url?` | 完整方案、耗时、token 与产物链接。`timings.summary_gate` 为 `pass` / `retry_pass` / `degraded` |
 | `subagent` | `name` | 调度的子智能体 |
 | `tool` | `name`, `args` | 工具调用 |
 | `tool_result` | `content` | 工具返回（已截断） |
@@ -186,7 +187,7 @@ python app.py   # 交互输入
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/` | 前端首页 |
-| GET | `/api/health` | 健康检查 |
+| GET | `/api/health` | `node`、高德 skill 目录、12306 MCP 是否可达；MCP 不可达时规划仍可降级 |
 | GET | `/results/...` | 方案 / 地图静态文件 |
 
 ---
@@ -215,11 +216,16 @@ python app.py   # 交互输入
 ├── frontend/               # 页面
 │   ├── index.html          # 结构
 │   ├── app.js              # 交互与 SSE
-│   ├── samples.js          # 首页演示稿
+│   ├── samples.js          # 首页验收场景稿
 │   ├── map.js              # 高德链接与路线预览
-│   └── style.css
+│   ├── style.css
+│   └── vendor/             # Vue、marked、DOMPurify
 ├── amap-lbs-skill/         # 高德地图 Skill（Node，只读挂载）
-├── evals/                  # 单元 / 集成评测（checkers.py、cases.md，说明见 evals/README.md）
+├── evals/                  # 单元 / 集成评测（说明见 EVALS.md）
+├── docs/adr/               # 架构决策
+├── ARCHITECTURE.md
+├── EVALS.md
+├── LICENSE
 ├── workspace/
 │   ├── config/memory/      # 智能体长期记忆
 │   └── results/            # 方案 md、maps/、snapshots/（内容 git 忽略，目录有 .gitkeep）
@@ -254,7 +260,7 @@ pytest -m integration evals/test_integration.py -q
 - 票务五态（`ok` / `skipped` / `unavailable` / `missed` / `timeout`）与路由注入
 - `stream_plan` 并行调度、自驾跳过查票、修订 map_only（mock）
 
-口径见 [`evals/cases.md`](evals/cases.md)。
+口径见 [`evals/cases.md`](evals/cases.md)。闸门与失败注入见 [`EVALS.md`](EVALS.md)。
 
 ---
 
@@ -275,12 +281,14 @@ LANGSMITH_PROJECT=travel-planner
 ## 设计要点与降级策略
 
 1. **车票不可用**：MCP 超时或失败 → 跳过 `ticket_agent`，方案中如实说明，不编造车次
-2. **无需铁路**：同城游 / 明确自驾地铁航空等 → `ticket` 步骤 `skipped`（`reason=no_rail_intent` 或 `intra_city`），文案为「未查票（无需铁路）」
-3. **本应查票未调度**：`missed` + SSE `warning`，汇总禁止编造
-4. **槽位抽取失败**：退回 legacy 提示词，仍尽量完成规划
-5. **客户端断开**：Web SSE 通过 `cancel_event` 尽快停止后续 LLM 调用，节省费用
-6. **调度超时**：`watch_aiter` 超时后 `aclose` 生成器，用已有结果汇总
-7. **Skill 只读**：高德目录经 `ReadOnlyBackend` 挂载，防止智能体改写脚本
+2. **成文闸门**：六章节缺失，或无可靠票务时出现车次号 → 带约束重试一次；仍失败则落盘降级说明（`summary_gate=degraded`）
+3. **无需铁路**：同城游 / 明确自驾地铁航空等 → `ticket` 步骤 `skipped`（`reason=no_rail_intent` 或 `intra_city`），文案为「未查票（无需铁路）」
+4. **本应查票未调度**：`missed` + SSE `warning`，汇总禁止编造
+5. **槽位抽取失败**：退回 legacy 提示词，仍尽量完成规划
+6. **客户端断开**：Web SSE 通过 `cancel_event` 尽快停止后续 LLM 调用，节省费用
+7. **调度超时**：`watch_aiter` 超时后 `aclose` 生成器，用已有结果汇总
+8. **Skill 只读**：高德目录经 `ReadOnlyBackend` 挂载，防止智能体改写脚本
+9. **限流**：`POST /api/plan` 默认每分钟 8 次（单进程内存计数）。设置 `PLAN_API_KEY` 后必须带 `X-API-Key`
 
 ---
 
@@ -311,4 +319,4 @@ LANGSMITH_PROJECT=travel-planner
 
 ## License
 
-仓库根目录没有 `LICENSE`，主体代码的许可证尚未写明。`amap-lbs-skill/` 有自己的 LICENSE，请一并遵守。选定许可证后补一份根目录 `LICENSE`。
+本仓库代码采用 [MIT License](LICENSE)。`amap-lbs-skill/` 使用该目录自带的 MIT 许可证（版权：高德地图开放平台），以该文件为准。

@@ -109,6 +109,9 @@ Thumbs.db
 desktop.ini
 ehthumbs.db
 
+# 架构图生成工作目录（可交互图单独放 docs/）
+.archify/
+
 # ----- AI / 本地助手缓存（勿提交）-----
 .workbuddy/
 .cursor/
