@@ -20,7 +20,7 @@ pytest -m integration evals/test_integration.py -q
 
 | 层 | 文件 | 依赖 |
 |----|------|------|
-| unit | `test_unit.py` / `test_stream_plan.py` / `test_routing.py` / `checkers.py` | 无网络 |
+| unit | `test_unit.py` / `test_stream_plan.py` / `test_routing.py` / `test_gate.py` / `checkers.py` | 无网络 |
 | integration | `test_integration.py` | API Key / 可 mock |
 
 ## 覆盖点
