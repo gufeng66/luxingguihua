@@ -1,11 +1,11 @@
 <!--
   旅游规划多智能体 — 前端首页
 
-  结构在本文件；交互在 app.js（Vue3 CDN），演示稿在 samples.js。
+  结构在本文件；交互在 app.js，验收场景稿在 samples.js。
   启动：python -m uvicorn server:app --reload --host 127.0.0.1 --port 8000
   然后打开 http://127.0.0.1:8000/
 
-  区块：顶栏状态 → 输入与演示剧本 → HITL 确认卡 → 左侧进度 / 右侧方案与地图
+  区块：顶栏状态 → 输入与验收场景 → HITL 确认卡 → 左侧进度 / 右侧方案与地图
 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -14,9 +14,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>旅游规划多智能体</title>
   <link rel="stylesheet" href="/style.css?v=sample" />
-  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-  <script src="https://unpkg.com/marked@15.0.7/marked.min.js"></script>
-  <script src="https://unpkg.com/dompurify@3.2.6/dist/purify.min.js"></script>
+  <script src="/vendor/vue.global.prod.js"></script>
+  <script src="/vendor/marked.min.js"></script>
+  <script src="/vendor/purify.min.js"></script>
 </head>
 <body>
   <div id="app">
@@ -32,7 +32,7 @@
     <div class="page">
       <div class="panel input-panel">
         <textarea v-model="query" maxlength="300" placeholder="例如：帮我规划下周六从杭州去苏州一日游，预算 800..." :disabled="awaitingClarify"></textarea>
-        <div class="demo-chips" aria-label="演示剧本">
+        <div class="demo-chips" aria-label="端到端验收场景">
           <button
             v-for="chip in demoChips"
             :key="chip.id"
