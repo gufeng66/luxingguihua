@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend
@@ -62,8 +63,20 @@ class ReadOnlyBackend:
 
 
 # ponytail: host shell, no sandbox. StateBackend has no execute, so map_agent never ran node and always hit the dispatch timeout. cwd is the skill dir so `node scripts/...` matches SKILL.md.
+# PATH 等只为让 node 能启动；密钥不继承。容器沙箱再隔离文件系统。
+_SHELL_KEEP = ("PATH", "PATHEXT", "SYSTEMROOT", "COMSPEC", "TEMP", "TMP")
+
+
+def shell_env() -> dict[str, str]:
+    env = {key: os.environ[key] for key in _SHELL_KEEP if os.environ.get(key)}
+    amap = (os.environ.get("AMAP_KEY") or os.environ.get("AMAP_WEBSERVICE_KEY") or "").strip()
+    if amap:
+        env["AMAP_KEY"] = amap
+    return env
+
+
 backend = CompositeBackend(
-    default=LocalShellBackend(root_dir=str(SKILL_DIR), inherit_env=True),
+    default=LocalShellBackend(root_dir=str(SKILL_DIR), inherit_env=False, env=shell_env()),
     routes={
         "/workspace/results/": FilesystemBackend(root_dir=str(RESULTS_DIR), virtual_mode=True),
         "/workspace/config/": FilesystemBackend(root_dir=str(CONFIG_DIR), virtual_mode=True),

@@ -19,6 +19,7 @@ from slots import ExtractedSlots, TravelSlots, _parse_today, normalize_extracted
 
 from planner.paths import WEEKDAYS
 from planner.prompts import SLOT_EXTRACT_PROMPT
+from planner.usage import note_llm
 
 
 def build_llm():
@@ -48,13 +49,18 @@ async def extract_slots(
         today=base.isoformat(),
         weekday=WEEKDAYS[base.weekday()],
     )
-    structured = llm.with_structured_output(ExtractedSlots, method="json_mode")
-    result = await structured.ainvoke(
+    structured = llm.with_structured_output(ExtractedSlots, method="json_mode", include_raw=True)
+    packed = await structured.ainvoke(
         [
             SystemMessage(content=prompt),
             HumanMessage(content=query),
         ]
     )
+    if isinstance(packed, dict) and "parsed" in packed:
+        note_llm(packed.get("raw"))
+        result = packed.get("parsed")
+    else:
+        result = packed
     if not isinstance(result, (ExtractedSlots, dict)):
         result = ExtractedSlots.model_validate(result)
     return normalize_extracted(result, today=base)

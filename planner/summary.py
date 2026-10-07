@@ -20,9 +20,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from slots import TravelSlots, format_slots_for_prompt
 
+from evals.checkers import TRAIN_NUMBER_RE, assert_no_fabricated_trains, missing_sections
+
 from planner.async_utils import message_text
 from planner.paths import RESULTS_DIR, SNAPSHOTS_DIR
 from planner.routing import TicketState, MapState
+from planner.usage import note_llm, usage_call
 
 SUMMARY_AGENT_PROMPT = """
 你是一名旅行方案汇总助手。
@@ -169,6 +172,41 @@ def build_trace_url(run_id: str) -> str | None:
         return None
 
 
+def summary_gate_issues(text: str, ticket_reason: TicketState) -> list[str]:
+    """成文闸门：六章节必须在；无可靠票务时车票建议里不能有车次号。"""
+    issues: list[str] = []
+    missing = missing_sections(text)
+    if missing:
+        issues.append("缺少章节: " + "、".join(missing))
+    if ticket_reason not in ("ok", "reused"):
+        try:
+            assert_no_fabricated_trains(text)
+        except AssertionError as exc:
+            issues.append(str(exc))
+    return issues
+
+
+def degraded_plan(ticket_reason: TicketState, issues: list[str]) -> str:
+    """校验两次仍失败时的成文。六章节都在，且不写车次号。"""
+    ticket_line = {
+        "skipped": "本次未查票（无需铁路）。",
+        "unavailable": "车票服务不可用，暂无可靠票务数据。",
+        "missed": "本应查票但未调度，未查票。",
+        "timeout": "查票超时，暂无可靠票务数据。",
+        "reused": "车票信息沿用上次查询。",
+        "ok": "票务原文未写入成文，此处不转述车次。",
+    }.get(ticket_reason, "车票服务不可用，暂无可靠票务数据。")
+    why = TRAIN_NUMBER_RE.sub("某车次", "；".join(issues) or "成文未通过校验")
+    return (
+        f"## 需求摘要\n汇总未通过校验（{why}），以下为降级说明，不编造车次或景点细节。\n\n"
+        "## 景点建议\n景点检索结果未写入成文。请重新规划，或查看已生成的地图文件。\n\n"
+        f"## 车票建议\n{ticket_line}\n\n"
+        "## 预算\n暂无可靠估算。\n\n"
+        "## 行程表\n暂无。\n\n"
+        "## 注意事项\n本次方案因校验失败已降级，请勿把未出现在检索结果中的车次当作查询结果。\n"
+    )
+
+
 async def stream_summary(
     *,
     llm: Any,
@@ -180,6 +218,7 @@ async def stream_summary(
     map_reason: MapState = "missed",
     previous_answer: str | None = None,
     revision_forbid_old_tickets: bool = False,
+    gate_feedback: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """流式生成最终 Markdown。对外 yield token；最后一帧 _summary_done 仅给 pipeline 收全文。"""
     slots_text = (
@@ -200,18 +239,22 @@ async def stream_summary(
         if revision_forbid_old_tickets:
             extra = "其中车次/票价/时刻一律不得沿用，必须以上述本次票务上下文为准。"
         parts.append(f"\n【上一版方案（仅供保持结构一致）】{extra}\n{previous_answer.strip()}\n")
+    if gate_feedback:
+        parts.append(f"\n【必须改正】\n{gate_feedback}\n")
     user_msg = "\n".join(parts)
     pieces: list[str] = []
-    async for chunk in llm.astream(
-        [
-            SystemMessage(content=SUMMARY_AGENT_PROMPT),
-            HumanMessage(content=user_msg),
-        ]
-    ):
-        delta = message_text(getattr(chunk, "content", None))
-        if not delta:
-            continue
-        pieces.append(delta)
-        yield {"type": "token", "content": delta}
+    with usage_call():
+        async for chunk in llm.astream(
+            [
+                SystemMessage(content=SUMMARY_AGENT_PROMPT),
+                HumanMessage(content=user_msg),
+            ]
+        ):
+            note_llm(chunk)
+            delta = message_text(getattr(chunk, "content", None))
+            if not delta:
+                continue
+            pieces.append(delta)
+            yield {"type": "token", "content": delta}
     full = "".join(pieces).strip() or "本次没有生成最终结果"
     yield {"type": "_summary_done", "content": full}

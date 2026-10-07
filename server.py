@@ -19,11 +19,13 @@ from __future__ import annotations
 
 # 异步事件：客户端断开时用来通知规划流水线停下来
 import asyncio
-# 把 Python 字典编成 JSON 字符串塞进 SSE
 import json
-# 读 CORS 等环境变量
+import logging
 import os
-# 定位 frontend、results 目录
+import shutil
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 # 加载 .env 里的密钥（DeepSeek / 高德等）
@@ -40,9 +42,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 # 规划流水线 + 可取消的异步迭代包装 + 结果目录
+from planner.ticket_agent import mcp_12306_url
 from planner_service import RESULTS_DIR, stream_plan, watch_aiter
 # 可选：前端确认卡回传的槽位
 from slots import TravelSlots
+
+logger = logging.getLogger("travel_planner")
+# ponytail: 单进程内存计数。多 worker 各自一份，挡不住打到别的进程上的请求。
+_rate_hits: dict[str, list[float]] = {}
 
 # 启动时加载环境变量
 load_dotenv(find_dotenv())
@@ -89,9 +96,45 @@ class PlanRequest(BaseModel):
 
 
 @app.get("/api/health")
-async def health() -> dict[str, str]:
-    """健康检查：运维/脚本用来确认服务是否活着。"""
-    return {"status": "ok"}
+async def health() -> dict[str, object]:
+    """进程活着，以及 node / 高德 skill / 12306 MCP 是否摸得到。"""
+    node = shutil.which("node")
+    skill_ok = (BASE_DIR / "amap-lbs-skill" / "package.json").is_file()
+    mcp_ok = await asyncio.to_thread(_probe_mcp, mcp_12306_url())
+    status = "ok" if node and skill_ok else "degraded"
+    return {
+        "status": status,
+        "node": bool(node),
+        "skill": skill_ok,
+        "mcp_reachable": mcp_ok,
+    }
+
+
+def _probe_mcp(url: str) -> bool:
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return int(resp.status) < 500
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return False
+
+
+def _reject_bad_api_key(header: str | None) -> None:
+    expected = (os.getenv("PLAN_API_KEY") or "").strip()
+    if expected and header != expected:
+        raise HTTPException(status_code=401, detail="缺少或错误的 X-API-Key")
+
+
+def _allow_plan(client: str) -> bool:
+    limit = int(os.getenv("PLAN_RATE_PER_MINUTE") or 8)
+    now = time.monotonic()
+    bucket = [t for t in _rate_hits.get(client, []) if now - t < 60]
+    if len(bucket) >= limit:
+        _rate_hits[client] = bucket
+        return False
+    bucket.append(now)
+    _rate_hits[client] = bucket
+    return True
 
 
 @app.post("/api/plan")
@@ -102,9 +145,13 @@ async def plan(req: PlanRequest, request: Request) -> StreamingResponse:
     """
     # 去掉首尾空格
     query = req.query.strip()
-    # 防御空字符串（Field 已限制，这里再保险一次）
     if not query:
         raise HTTPException(status_code=400, detail="query 不能为空")
+    _reject_bad_api_key(request.headers.get("x-api-key"))
+    client = request.client.host if request.client else "local"
+    if not _allow_plan(client):
+        raise HTTPException(status_code=429, detail="规划太频繁，请一分钟后再试")
+    logger.info("plan_request client=%s bytes=%s", client, len(query))
 
     # 取消开关：set() 之后 stream_plan / watch_aiter 会尽快停
     cancel_event = asyncio.Event()

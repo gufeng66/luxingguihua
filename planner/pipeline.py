@@ -53,12 +53,15 @@ from planner.routing import (
 )
 from planner.summary import (
     build_trace_url,
+    degraded_plan,
     load_snapshot,
     parse_plan_id,
     rewrite_plan_ids,
     save_plan,
     save_snapshot,
+    summary_gate_issues,
 )
+from planner.usage import begin_usage, current_usage
 from planner.ticket_cache import last_lookup
 
 logger = logging.getLogger("travel_planner")
@@ -95,6 +98,7 @@ async def stream_plan(
     cancel_event: 浏览器断开时 set，尽快停 LLM。
     """
     svc = _svc()
+    begin_usage()
     plan_uuid = uuid4()
     plan_id = str(plan_uuid)
     cancelled = False
@@ -404,7 +408,8 @@ async def stream_plan(
         t_summary = time.monotonic()
 
         answer = "本次没有生成最终结果"
-        async for event in svc.stream_summary(
+        gate = "pass"
+        summary_kwargs = dict(
             llm=llm,
             query=query,
             slots=confirmed,
@@ -414,17 +419,42 @@ async def stream_plan(
             map_reason=map_reason,
             previous_answer=previous_answer or None,
             revision_forbid_old_tickets=revision_kind == "ticket_and_map",
-        ):
-            if cancel_event is not None and cancel_event.is_set():
-                cancelled = True
+        )
+        issues: list[str] = []
+        for attempt in (1, 2):
+            if attempt == 2:
+                yield {"type": "status", "message": "成文未通过校验，带约束重试一次"}
+            answer = "本次没有生成最终结果"
+            feedback = None
+            if attempt == 2:
+                feedback = (
+                    "上次成文未通过校验："
+                    + "；".join(issues)
+                    + "。必须输出六个 Markdown 二级标题（需求摘要、景点建议、车票建议、预算、行程表、注意事项）。"
+                    "无可靠票务时，车票建议中禁止出现车次号。"
+                )
+            async for event in svc.stream_summary(**summary_kwargs, gate_feedback=feedback):
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                    break
+                if event.get("type") == "_summary_done":
+                    answer = str(event.get("content") or answer)
+                else:
+                    yield event
+            if cancelled:
+                return
+            issues = summary_gate_issues(answer, ticket_reason)
+            if not issues:
+                gate = "retry_pass" if attempt == 2 else "pass"
                 break
-            if event.get("type") == "_summary_done":
-                answer = str(event.get("content") or answer)
-            else:
-                yield event
-
-        if cancelled:
-            return
+        else:
+            answer = degraded_plan(ticket_reason, issues)
+            gate = "degraded"
+            yield {
+                "type": "warning",
+                "code": "summary_degraded",
+                "message": "成文两次未通过校验，已降级为不含编造车次的说明",
+            }
 
         summary_ms = ms_since(t_summary)
         yield {"type": "step", "id": "summary", "status": "done", "elapsed_ms": summary_ms}
@@ -441,6 +471,7 @@ async def stream_plan(
                 "map_context": map_context,
                 "ticket_context": ticket_context,
                 "answer": answer,
+                "usage": current_usage().as_dict(),
             }
         )
         map_file = MAPS_DIR / f"{plan_id}.html"
@@ -455,6 +486,8 @@ async def stream_plan(
             "total_ms": ms_since(t_total),
             "ticket_cache_hit": ticket_cache_hit,
             "parallel_dispatch": bool(parallel_tasks and parallel_results),
+            "summary_gate": gate,
+            **current_usage().as_dict(),
         }
         if map_ms is not None:
             timings["map_ms"] = map_ms

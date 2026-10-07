@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from planner.async_utils import message_text, ms_since, truncate, watch_aiter
+from planner.usage import note_llm
 
 logger = logging.getLogger("travel_planner")
 
@@ -126,6 +127,7 @@ def _on_model(
 ) -> Iterator[dict[str, Any]]:
     task_names: list[str] = []
     for message in state["messages"]:
+        note_llm(message)
         text = message_text(getattr(message, "content", None))
         if text:
             yield {"type": "model", "content": text}
