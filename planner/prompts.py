@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 
 from slots import TravelSlots, format_slots_for_prompt
@@ -69,6 +70,10 @@ NEED_RAIL_PATCH = """
 本次路由判定需要铁路（跨城或用户明确要坐火车/高铁）。已挂载 ticket_agent，必须在同一轮对 map_agent 与 ticket_agent 各发起一次 task（一条消息里两个 tool call），禁止先等一个返回再调另一个。
 """
 
+SERIAL_RAIL_PATCH = """
+本次路由判定需要铁路（跨城或用户明确要坐火车/高铁）。已挂载 ticket_agent。先调度 map_agent，等它返回后再调度 ticket_agent。禁止在同一条消息里发起两个 task。
+"""
+
 NO_RAIL_PATCH = """
 本次路由判定无需铁路（{reason}）。不要调用 ticket_agent，不要走 12306；只调度 map_agent；禁止编造车次/票价。
 """
@@ -87,7 +92,7 @@ SLOT_EXTRACT_PROMPT = """你是旅行需求槽位抽取器。今天是 {today}�
 1. 用户未提及的字段填 null，不要猜测填充
 2. date：若是相对日期（明天/下周六等）请换算成 YYYY-MM-DD；已是具体日期则用 YYYY-MM-DD；无法确定则 null
 3. days 必须是正整数或 null
-4. 只输出结构化字段，不要解释
+4. 只输出 json，不要解释
 """
 
 
@@ -127,8 +132,12 @@ def build_main_prompt(
         rail_rule = "路由已判定无需铁路，禁止调用 ticket_agent。"
     elif ticket_available:
         if need_map:
-            ticket_patch = NEED_RAIL_PATCH
-            rail_rule = "路由已判定需要铁路：必须同轮并行调度 map_agent 与 ticket_agent。"
+            if (os.getenv("FORCE_SERIAL") or "").strip() == "1":
+                ticket_patch = SERIAL_RAIL_PATCH
+                rail_rule = "路由已判定需要铁路：先等 map_agent 返回，再调度 ticket_agent。"
+            else:
+                ticket_patch = NEED_RAIL_PATCH
+                rail_rule = "路由已判定需要铁路：必须同轮并行调度 map_agent 与 ticket_agent。"
         else:
             ticket_patch = "必须调度 ticket_agent 查票。用户不要路线地图，禁止调用 map_agent。\n"
             rail_rule = "需要铁路查票，但不要调度 map_agent。"

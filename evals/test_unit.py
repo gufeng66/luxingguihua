@@ -242,6 +242,145 @@ def test_main_prompt_requires_parallel_and_intent_priority() -> None:
     assert "amapTaskData" in no_rail
 
 
+def test_slots_from_query_keeps_lodging_and_saturday() -> None:
+    from slots import slots_from_query
+
+    query = "这周六从新乡坐高铁去北京5日游，预算 5000，少折腾，我住在北京西站附近"
+    slots = slots_from_query(query, today=date(2026, 10, 8))
+    assert slots is not None
+    assert slots.origin == "新乡"
+    assert slots.destination == "北京"
+    assert slots.date == "2026-10-10"
+    assert slots.days == 5
+    assert slots.lodging == "北京西站附近"
+    assert slots.budget == "5000"
+    bare = TravelSlots(origin="新乡", destination="北京", date="2026-10-10", days=5)
+    assert should_clarify(bare, slots_from_client=False) is True
+    bare.lodging = "北京西站附近"
+    assert should_clarify(bare, slots_from_client=False) is False
+
+
+def test_destination_from_query_when_slots_missing() -> None:
+    from planner.map_fallback import days_from_query, destination_from_query
+
+    query = "这周六从新乡坐高铁去北京5日游，预算 5000，少折腾，我住在北京西站附近"
+    assert destination_from_query(query) == "北京"
+    assert days_from_query(query) == 5
+    assert destination_from_query("下周六杭州坐高铁去苏州一日游") == "苏州"
+    assert days_from_query("下周六杭州坐高铁去苏州一日游") == 1
+
+
+def test_slot_prompt_allows_json_mode() -> None:
+    from planner.prompts import SLOT_EXTRACT_PROMPT
+
+    assert "json" in SLOT_EXTRACT_PROMPT
+
+
+def test_content_filter_keeps_coordinates() -> None:
+    from langchain_core.messages import ToolMessage
+
+    from planner.llm import shrink_for_content_filter
+
+    raw = "天坛公园\n   坐标: 116.410000,39.882000\n" + ("噪声" * 2000)
+    out, changed = shrink_for_content_filter(
+        [ToolMessage(content=raw, tool_call_id="1")],
+        drop_tools=False,
+    )
+    text = out[0].content
+    assert changed
+    assert "116.410000,39.882000" in text
+    assert "噪声" not in text
+
+
+def test_content_filter_drop_tools_strips_names() -> None:
+    from langchain_core.messages import ToolMessage
+
+    from planner.llm import shrink_for_content_filter
+
+    raw = "天安门\n   坐标: 116.397128,39.903119\n"
+    out, changed = shrink_for_content_filter(
+        [ToolMessage(content=raw, tool_call_id="1")],
+        drop_tools=True,
+    )
+    assert changed
+    assert "天安门" not in out[0].content
+    assert "116.397128" not in out[0].content
+
+
+@pytest.mark.asyncio
+async def test_content_risk_does_not_raise() -> None:
+    from planner.llm import _install_content_risk_retry
+
+    class Boom:
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+            raise RuntimeError("Error code: 400 - Content Exists Risk (request_id: abc)")
+
+    llm = _install_content_risk_retry(Boom())
+    result = await llm._agenerate([])
+    assert "内容审核" in result.generations[0].message.content
+
+
+def test_ensure_route_map_writes_html(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    import planner.map_fallback as fb
+
+    monkeypatch.setattr(fb, "MAPS_DIR", tmp_path)
+    monkeypatch.setenv("AMAP_KEY", "test-key")
+    monkeypatch.setenv("TRAVEL_MAP_FALLBACK", "1")
+    bodies = {
+        "北京西站": {"status": "1", "pois": [{"name": "北京西站", "location": "116.322000,39.895000", "address": "莲花池东路"}]},
+        "景点": {
+            "status": "1",
+            "pois": [
+                {"name": "天坛公园", "location": "116.410000,39.882000", "address": "东城区"},
+                {"name": "前门大街", "location": "116.398000,39.899000", "address": "东城区"},
+                {"name": "北京西站", "location": "116.322000,39.895000", "address": "重复"},
+            ],
+        },
+    }
+
+    def opener(req, timeout=8):
+        url = req.full_url
+        key = "景点" if "keywords=%E6%99%AF%E7%82%B9" in url or "景点" in url else "北京西站"
+        raw = json.dumps(bodies[key]).encode()
+
+        class Resp:
+            def read(self):
+                return raw
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        return Resp()
+
+    note = fb.ensure_route_map(
+        "11111111-1111-1111-1111-111111111111",
+        destination="北京",
+        days=2,
+        lodging="北京西站",
+        opener=opener,
+    )
+    html = (tmp_path / "11111111-1111-1111-1111-111111111111.html").read_text(encoding="utf-8")
+    assert note and "天坛公园" in note and "北京西站" in note
+    assert html.count("北京西站") >= 1
+    assert "amapTaskData" in html and "overscroll-behavior" in html
+    data = json.loads(html.split('type="application/json">', 1)[1].split("</script>", 1)[0])
+    by_day: dict[int, list[str]] = {}
+    for item in data:
+        if item["type"] == "poi":
+            by_day.setdefault(item["day"], []).append(item["text"])
+    assert set(by_day) == {1, 2}
+    for names in by_day.values():
+        assert names[0] == "北京西站" and names[-1] == "北京西站"
+        assert len(names) >= 3
+    assert "返回住宿地" in html
+    assert fb.ensure_route_map("../x", destination="北京", opener=opener) is None
+
+
 def test_map_agent_prompt_amap_task_data_contract() -> None:
     from planner.map_agent import MAP_AGENT_PROMPT
 
@@ -253,6 +392,7 @@ def test_map_agent_prompt_amap_task_data_contract() -> None:
     assert "percent-encoding" in MAP_AGENT_PROMPT
     assert "uri.amap.com/marker" in MAP_AGENT_PROMPT
     assert "amapApp" in MAP_AGENT_PROMPT
+    assert "参考坐标" in MAP_AGENT_PROMPT
 
 
 def test_map_iframe_sandbox_allows_amap_popups() -> None:

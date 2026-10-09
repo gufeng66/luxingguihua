@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from typing import Any
 
 from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend
@@ -21,7 +23,20 @@ from deepagents.backends.protocol import (
     WriteResult,
 )
 
-from planner.paths import CONFIG_DIR, RESULTS_DIR, SKILL_DIR
+from planner.paths import CONFIG_DIR, CONSOLE_ENCODING, RESULTS_DIR, SKILL_DIR
+
+# ponytail: deepagents 用 text=True 读 shell。paths 把 locale 改成 utf-8 后，中文 Windows 上 cmd/node 的 GBK 会让读线程崩掉，模型看不到命令输出。
+if sys.platform == "win32" and not getattr(subprocess.run, "_console_text", False):
+    _subprocess_run = subprocess.run
+
+    def _run_console_text(*args: Any, **kwargs: Any):
+        if kwargs.get("text") or kwargs.get("universal_newlines"):
+            kwargs.setdefault("encoding", CONSOLE_ENCODING or "utf-8")
+            kwargs.setdefault("errors", "replace")
+        return _subprocess_run(*args, **kwargs)
+
+    _run_console_text._console_text = True  # type: ignore[attr-defined]
+    subprocess.run = _run_console_text  # type: ignore[assignment]
 
 
 class ReadOnlyBackend:

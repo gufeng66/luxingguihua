@@ -109,8 +109,8 @@ def resolve_relative_date(text: str, today: date | str | None = None) -> str | N
         # 下下周 = 下周再 +7
         return (first + timedelta(days=7 * (weeks - 1))).isoformat()
 
-    # 「本周X」：落到本周该日（含今天）
-    m = re.search(r"本周([一二三四五六日天])", s)
+    # 「本周X / 这周X」：落到本周该日（含今天）
+    m = re.search(r"(?:本周|这周)([一二三四五六日天])", s)
     if m:
         target = _WEEKDAY_CN[m.group(1)]
         days_until = (target - base.weekday()) % 7
@@ -246,6 +246,58 @@ def normalize_extracted(
     return TravelSlots.model_validate(data)
 
 
+_DEST = re.compile(r"去([\u4e00-\u9fff]{2,6}?)(?:[0-9一二两三四五六七八九十]|日|天|游|玩)")
+_DAYS_DIGIT = re.compile(r"(\d+)\s*日")
+_DAYS_CN = re.compile(r"([一二两三四五六七八九十])\s*日")
+_CN_DAYS = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+_FROM = re.compile(r"从([\u4e00-\u9fff]{2,8}?)(?:坐|乘|出发|去|到)")
+_STAY = re.compile(r"住在([^，。,；;\n]{2,20})")
+_BUDGET = re.compile(r"预算\s*([0-9]+)")
+_WHEN = re.compile(r"(?:下下周|下周|这周|本周)[一二三四五六日天]|大后天|后天|明天|今天")
+
+
+def destination_from_query(query: str) -> str:
+    match = _DEST.search(query or "")
+    return match.group(1) if match else ""
+
+
+def days_from_query(query: str) -> int:
+    match = _DAYS_DIGIT.search(query or "")
+    if match:
+        return max(1, min(30, int(match.group(1))))
+    match = _DAYS_CN.search(query or "")
+    if match:
+        return _CN_DAYS[match.group(1)]
+    return 1
+
+
+def lodging_from_query(query: str) -> str | None:
+    match = _STAY.search(query or "")
+    if not match:
+        return None
+    text = match.group(1).strip()
+    return text or None
+
+
+def slots_from_query(query: str, *, today: date | str | None = None) -> TravelSlots | None:
+    """模型抽槽失败时，从原话里取出能确定的出发地、目的地、住宿地。"""
+    destination = destination_from_query(query)
+    if not destination:
+        return None
+    origin = _FROM.search(query or "")
+    budget = _BUDGET.search(query or "")
+    when = _WHEN.search(query or "")
+    return TravelSlots(
+        origin=origin.group(1) if origin else None,
+        destination=destination,
+        date=resolve_relative_date(when.group(0), today=today) if when else None,
+        days=days_from_query(query),
+        budget=budget.group(1) if budget else None,
+        preferences="少折腾" if "少折腾" in (query or "") else None,
+        lodging=lodging_from_query(query),
+    )
+
+
 def lodging_route_rules(lodging: str | None, destination: str | None, rail: bool) -> str:
     """有住宿地时生成闭环路线文案；空住宿地返回空串。"""
     if not lodging or not str(lodging).strip():
@@ -255,11 +307,12 @@ def lodging_route_rules(lodging: str | None, destination: str | None, rail: bool
         "【住宿地闭环路线规则】",
         "1. 先用 amap poi-search 定位住宿地；每天都有一个住宿 POI（同一坐标、day 不同）",
         "2. 每天路线从住宿地出发，最后一个景点之后回到住宿地",
+        "3. 每个完整游玩日安排 3 到 4 个景点。少折腾指少换乘、顺路，不是少排景点",
     ]
     if rail:
         lines += [
-            f"3. 第一天第一段：{destination}的车站 → 住宿地（先放行李）；车站优先用户点名的站，否则搜{destination}高铁站，不等查票结果",
-            "4. 最后一天：回到住宿地之后，再加一段 住宿地 → 车站",
+            f"4. 第一天第一段：{destination}的车站 → 住宿地（先放行李）；车站优先用户点名的站，否则搜{destination}高铁站，不等查票结果",
+            "5. 最后一天：回到住宿地之后，再加一段 住宿地 → 车站",
         ]
     return "\n".join(lines)
 
@@ -282,12 +335,20 @@ def format_slots_for_prompt(slots: TravelSlots, *, rail: bool = False) -> str:
     return "\n".join(lines)
 
 
+def clarify_missing(slots: TravelSlots | None) -> list[str]:
+    """缺出发地/目的地/日期要问；多日行程没说住宿地也要问，不能编一个酒店。"""
+    missing = list(missing_critical(slots))
+    if slots is not None and (slots.days or 1) > 1 and not slots.lodging:
+        missing.append("lodging")
+    return missing
+
+
 def should_clarify(slots: TravelSlots | None, *, slots_from_client: bool) -> bool:
     """要不要弹出确认卡？
 
     - 前端已经回传过 slots，且关键字段齐全 → 不再问
-    - 否则只要还缺 critical → 要问
+    - 否则只要还缺 critical，或多日行程缺住宿地 → 要问
     """
-    if slots_from_client and slots is not None and not missing_critical(slots):
+    if slots_from_client and slots is not None and not clarify_missing(slots):
         return False
-    return bool(missing_critical(slots))
+    return bool(clarify_missing(slots))

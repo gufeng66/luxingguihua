@@ -85,7 +85,14 @@ class usage_call:
         return self
 
     def __exit__(self, *_exc: object) -> None:
-        holder = _call.get()
-        _call.reset(self._token)
+        try:
+            holder = _call.get()
+        except LookupError:
+            holder = None
+        try:
+            _call.reset(self._token)
+        except ValueError:
+            # 热重载掐断 SSE 时，退出发生在另一个 context，reset 会抛。
+            _call.set(None)
         if holder and (holder[0] or holder[1]):
             current_usage().add_call(holder[0], holder[1])

@@ -1,0 +1,63 @@
+{
+  "cases": [
+    {
+      "case_id": "cross_city_hsr",
+      "mode": "live",
+      "query": "这周六从新乡坐高铁去郑州一日游，预算 500，少折腾",
+      "expect": {"need_ticket": true, "need_map": true}
+    },
+    {
+      "case_id": "xinxiang_drive_luoyang",
+      "mode": "live",
+      "query": "下周从新乡租电车自驾去洛阳两天，轻松点，别安排开封和宝泉",
+      "expect": {"need_ticket": false, "need_map": true, "ticket_reason": "skipped"}
+    },
+    {
+      "case_id": "hitl_zhengzhou",
+      "mode": "live",
+      "rounds": "clarify_then_slots",
+      "query": "周末去郑州玩",
+      "slots": {"origin": "新乡", "destination": "郑州", "date": "2026-10-17", "days": 1},
+      "expect": {"first": "clarify", "second_need_ticket": true}
+    },
+    {
+      "case_id": "revision_map_only",
+      "mode": "live",
+      "after": "xinxiang_drive_luoyang",
+      "query": "不要龙门石窟，改白马寺，路线顺一点",
+      "expect": {"ticket_reason": "reused_or_skipped", "need_ticket": false}
+    },
+    {
+      "case_id": "mcp_unavailable",
+      "mode": "live",
+      "mcp_url": "http://127.0.0.1:1/mcp",
+      "query": "这周六从新乡坐高铁去郑州一日游，预算 500，少折腾",
+      "expect": {"ticket_reason": "unavailable"}
+    },
+    {
+      "case_id": "hangzhou_westlake_same_city",
+      "mode": "offline",
+      "test_ref": "evals/test_routing.py::test_normalize_hangzhou_westlake_same_city"
+    },
+    {
+      "case_id": "xinxiang_vs_county",
+      "mode": "offline",
+      "test_ref": "evals/test_routing.py::test_normalize_xinxiang_vs_county_not_same"
+    },
+    {
+      "case_id": "ticket_not_dispatched",
+      "mode": "offline",
+      "test_ref": "evals/test_stream_plan.py::test_stream_plan_missed_ticket_warning"
+    },
+    {
+      "case_id": "skip_map",
+      "mode": "offline",
+      "test_ref": "evals/test_routing.py::test_skip_map_and_resolve_map_state"
+    },
+    {
+      "case_id": "plan_id_traversal",
+      "mode": "offline",
+      "test_ref": "evals/test_stream_plan.py::test_plan_id_path_traversal_rejected"
+    }
+  ]
+}

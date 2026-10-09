@@ -17,3 +17,15 @@
 ## 后果
 
 模型读 `process.env.OPENAI_API_KEY` 这条路被切断。shell 仍能读磁盘上的 `.env` 文件，也能访问网络。要挡住文件和网络，需要换到容器或虚拟机里执行，而不是再包一层 Python 包装。
+
+## 风险矩阵
+
+| 风险 | 现状 | 说明 |
+|------|------|------|
+| 子进程继承 LLM / LangSmith Key | 已缓解 | `inherit_env=False`，只放行 node 启动所需变量和 `AMAP_KEY` |
+| 文件工具改写高德 Skill | 已缓解 | `ReadOnlyBackend` 拒绝 write / edit / delete / upload |
+| 成文编造车次号 | 已缓解 | 六章节闸门，无可靠票务时丢掉车次号，失败则降级 |
+| `plan_id` 路径穿越读快照 | 已缓解 | 只接受 UUID |
+| shell 读取磁盘上的 `.env` | 未缓解 | 环境白名单挡不住 `type .env` |
+| shell 访问任意网络 | 未缓解 | 没有 egress 限制 |
+| 容器沙箱 + 出网白名单 | 生产才做 | 个人项目不在宿主机上再包一层假沙箱 |

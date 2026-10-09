@@ -30,6 +30,8 @@ workspace/results/snapshots/*
 
 # 日志与临时文件
 logs/
+amap-lbs-skill/_tr_*.json
+amap-lbs-skill/_probe_out.txt
 *.log
 *.tmp
 *.temp
@@ -111,6 +113,9 @@ ehthumbs.db
 
 # 架构图生成工作目录（可交互图单独放 docs/）
 .archify/
+
+# 黄金集原始逐条输出（汇总在 evals/metrics.json）
+evals/rows.jsonl
 
 # ----- AI / 本地助手缓存（勿提交）-----
 .workbuddy/

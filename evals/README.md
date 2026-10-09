@@ -14,7 +14,7 @@ LLM 集成（需 `.env` 中 DeepSeek Key）：
 pytest -m integration evals/test_integration.py -q
 ```
 
-人读口径与 `test_routing.py` 顶部 `CASES` 同构：见 [`cases.md`](cases.md)。
+人读口径与 `test_routing.py` 顶部 `CASES` 同构：见 [`cases.md`](cases.md)。真跑黄金集（需 Key，不进 CI）：`python -m evals.run_golden`，再 `python -m evals.judge`。
 
 ## 分层
 

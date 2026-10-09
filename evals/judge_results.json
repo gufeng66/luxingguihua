@@ -1,0 +1,124 @@
+{
+  "model": "f2c-deepseek-v4-flash",
+  "same_model_bias": true,
+  "git_sha": "680694f4051f890cf2b0facf27afafef6b3fecf6",
+  "n": 18,
+  "score_min": 2,
+  "score_max": 5,
+  "results": [
+    {
+      "score": 5,
+      "reasons": [],
+      "plan_id": "4c624cac-9386-41a6-9449-aea971638cee"
+    },
+    {
+      "score": 5,
+      "reasons": [],
+      "plan_id": "53e1e55c-cc44-4627-9d16-50fb3c6cf00a"
+    },
+    {
+      "score": 4,
+      "reasons": [
+        "预算中餐饮 ¥80–120、备用/杂项 ¥50–100 及合计 ¥212–307 为工具原文未给出的估算，属于轻微编造。",
+        "站内步行/安检进地铁写 20 分钟，map_context 为 15 分钟；如意湖/千玺广场停留 165 分钟，map_context 时间轴假设为 75 分钟，停留时长未严格按原文。"
+      ],
+      "plan_id": "176b9192-49c4-42c9-9cd0-259c356a30b6"
+    },
+    {
+      "score": 5,
+      "reasons": [],
+      "plan_id": "71b43c8f-5527-4f7b-a3cc-e542736e52ab"
+    },
+    {
+      "score": 5,
+      "reasons": [],
+      "plan_id": "70f9ed21-1418-4333-b692-35a53583b9ba"
+    },
+    {
+      "score": 5,
+      "reasons": [],
+      "plan_id": "eec0b41e-be5b-41d3-94d4-79d291056008"
+    },
+    {
+      "score": 5,
+      "reasons": [],
+      "plan_id": "967e6f41-9556-4430-8c73-a7032c8bb71f"
+    },
+    {
+      "score": 5,
+      "reasons": [],
+      "plan_id": "767da062-d853-43ab-8809-7fb2199cbfc7"
+    },
+    {
+      "score": 5,
+      "reasons": [],
+      "plan_id": "f848cf4e-24c9-4ce9-b373-dab04b8d543f"
+    },
+    {
+      "score": 5,
+      "reasons": [],
+      "plan_id": "52f2b870-8f50-4bb1-9782-c48e838d5d6f"
+    },
+    {
+      "score": 2,
+      "reasons": [
+        "map_context 仅列出 HTML 文件路径，未提供可核对的景点清单，成文中的龙门石窟、隋唐洛阳城、白马寺、洛邑古城、隋唐大运河文化博物馆、洛浦公园等无法确认与 map_context 一致。",
+        "ticket_context 为空，但成文引入大量具体信息：获嘉/济源南服务区、菏宝/二广等高速、185.6–199.8 km、87–93 元过路费、1.0–1.8 元/度电价、全季酒店（洛阳洛邑古城店）等，均无工具原文依据，按规则属编造/外部知识。",
+        "自检报告称禁用词“车次”命中 0，但成文出现“车次号”，自检与交付内容不一致，影响可信度。"
+      ],
+      "plan_id": "697c50e4-28ad-4c28-bdad-031c17c71b54"
+    },
+    {
+      "score": 5,
+      "reasons": [],
+      "plan_id": "35b9b9a1-2179-41be-9521-712e4ed94682"
+    },
+    {
+      "score": 4,
+      "reasons": [
+        "六章节齐全，车次未与空 ticket_context 冲突，推荐景点基本与 map_context 一致。",
+        "行程表总时长 12 小时 49 分且成文自承偏满，与 slots 的“舒适型节奏”不符。",
+        "成文提到“龙门石窟”“开封”“宝泉”等 map_context 未明确出现的信息，属于对照原文之外的表述/排除项，轻微扣分。"
+      ],
+      "plan_id": "f7974bf9-3f5a-42a2-82a5-c27678e34c76"
+    },
+    {
+      "score": 5,
+      "reasons": [],
+      "plan_id": "f9748cda-a757-4ce5-adda-49d10102e876"
+    },
+    {
+      "score": 4,
+      "reasons": [
+        "车票建议中称“车票子智能体结果标注为无需铁路出行”，但 ticket_context 为空，原文无此结果，属于无依据表述/轻微编造。"
+      ],
+      "plan_id": "a89cdab0-2be0-45c0-b5fd-adfa34be6e7b"
+    },
+    {
+      "score": 5,
+      "reasons": [],
+      "plan_id": "11042d4d-e26b-46ca-99c2-de706acc8d76"
+    },
+    {
+      "score": 3,
+      "reasons": [
+        "预算口径与 map_context 不一致：原文两档预算中均含铁路约¥60并合计为¥200/¥425，成文却称“不含铁路票款”“铁路估算未纳入确认”，但表格仍沿用原合计。",
+        "成文出现 ticket_context/map_context 未提供的“新乡”“周六”“新乡东↔郑州东”“门票预约”等信息，未受给定上下文支持。",
+        "车票建议虽未编造具体车次号，但站名与往返路线依据在 ticket_context 为空时不足。"
+      ],
+      "plan_id": "b880bca3-0985-4578-b893-80ff31ae4e31"
+    },
+    {
+      "score": 2,
+      "reasons": [
+        "六章节基本齐全：需求摘要、景点建议、车票建议、预算、行程表、注意事项均有。",
+        "ticket_context 为空且报告未给出具体车次号，因此不存在车次号编造问题。",
+        "但 ticket_context 为空时，报告仍提供“城际高铁直达、单程约20–30分钟”“城际往返约¥60”等票务/交通结论，属工具原文无依据的编造。",
+        "map_context 仅为文件路径列表，且其中不包含报告所称的 c79fe1d8-4409-45ec-9d55-7b68db1e5ef0.html；报告中的如意湖、千玺广场、德化步行街、二七广场等景点无法与 map_context 核对，来源不明。",
+        "报告称“任务建议点位中的河南博物院已主动剔除”，但 slots 为 null，工具原文中没有该建议点位，属引入无依据内容。",
+        "slots 为 null，未发现明显违反 slots 的项。"
+      ],
+      "plan_id": "c79fe1d8-4409-45ec-9d55-7b68db1e5ef0"
+    }
+  ]
+}

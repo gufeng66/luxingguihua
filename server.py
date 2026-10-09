@@ -42,6 +42,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 # 规划流水线 + 可取消的异步迭代包装 + 结果目录
+from planner.plans_store import list_plans
 from planner.ticket_agent import mcp_12306_url
 from planner_service import RESULTS_DIR, stream_plan, watch_aiter
 # 可选：前端确认卡回传的槽位
@@ -192,6 +193,14 @@ async def plan(req: PlanRequest, request: Request) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.get("/api/plans")
+async def plans(request: Request, limit: int = 20) -> dict[str, object]:
+    """最近规划记录。库在 workspace/results/plans.db，不进 git。"""
+    _reject_bad_api_key(request.headers.get("x-api-key"))
+    rows = await asyncio.to_thread(list_plans, limit)
+    return {"plans": rows}
 
 
 # 必须在全部 API 与 /results 之后注册，避免吃掉 /api/*

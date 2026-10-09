@@ -29,13 +29,16 @@ from typing import Any
 from uuid import uuid4
 
 from planner.map_agent import map_agent
+from planner.map_fallback import days_from_query, destination_from_query, ensure_route_map
 from slots import (
     TravelSlots,
     apply_soft_defaults,
     format_slots_for_prompt,
+    clarify_missing,
+    lodging_from_query,
     lodging_route_rules,
-    missing_critical,
     should_clarify,
+    slots_from_query,
 )
 
 from planner.async_utils import ms_since
@@ -61,6 +64,7 @@ from planner.summary import (
     save_snapshot,
     summary_gate_issues,
 )
+from planner.plans_store import record_plan
 from planner.usage import begin_usage, current_usage
 from planner.ticket_cache import last_lookup
 
@@ -79,9 +83,13 @@ def _clarify_event(slots: TravelSlots) -> dict[str, Any]:
     return {
         "type": "clarify",
         "slots": preview.model_dump(),
-        "missing": missing_critical(slots),
+        "missing": clarify_missing(slots),
         "defaults_applied": defaults_applied,
-        "message": "请确认或补全关键信息后继续",
+        "message": (
+            "多日行程请补充住宿地。每天从住宿地出发，最后一个景点结束后回到住宿地。"
+            if "lodging" in clarify_missing(slots)
+            else "请确认或补全关键信息后继续"
+        ),
     }
 
 
@@ -198,9 +206,20 @@ async def stream_plan(
                     return
                 confirmed, _ = apply_soft_defaults(extracted)
             except Exception:
-                legacy_mode = True
-                confirmed = None
-                yield {"type": "status", "message": "参数解析失败，按原模式规划"}
+                logger.exception("slot_extract_failed")
+                guessed = slots_from_query(query)
+                if guessed is not None and not should_clarify(guessed, slots_from_client=False):
+                    confirmed, _ = apply_soft_defaults(guessed)
+                    yield {"type": "slots", "slots": confirmed.model_dump()}
+                    yield {"type": "status", "message": "参数解析失败，已按原话中的出发地、目的地和住宿地继续"}
+                elif guessed is not None:
+                    yield _clarify_event(guessed)
+                    yield {"type": "step", "id": "understand", "status": "done"}
+                    return
+                else:
+                    legacy_mode = True
+                    confirmed = None
+                    yield {"type": "status", "message": "参数解析失败，按原模式规划"}
 
         if cancel_event is not None and cancel_event.is_set():
             return
@@ -358,6 +377,15 @@ async def stream_plan(
                 )
 
             map_file_now = MAPS_DIR / f"{plan_id}.html"
+            if need_map and not map_file_now.is_file():
+                dest = (confirmed.destination if confirmed is not None else "") or destination_from_query(query)
+                stay = (confirmed.lodging if confirmed is not None else None) or lodging_from_query(query)
+                day_count = confirmed.days if confirmed is not None and confirmed.days else days_from_query(query)
+                note = ensure_route_map(plan_id, destination=dest or "", days=day_count, lodging=stay)
+                if note:
+                    map_context = note
+                    logger.warning("map_fallback plan_id=%s", plan_id)
+                    yield {"type": "status", "message": "地图子智能体未写出文件，已用高德检索补写路线地图"}
             map_reason = resolve_map_state(
                 need_map=need_map,
                 dispatched=map_dispatched,
@@ -507,6 +535,15 @@ async def stream_plan(
         trace_url = build_trace_url(plan_id)
         if trace_url:
             final_event["trace_url"] = trace_url
+        await record_plan(
+            plan_id=plan_id,
+            query=query,
+            slots=confirmed.model_dump() if confirmed is not None else None,
+            status="ok",
+            timings=timings,
+            artifact=saved_url,
+            ok=True,
+        )
         yield final_event
     except asyncio.CancelledError:
         if cancel_event is not None and cancel_event.is_set():
@@ -516,4 +553,13 @@ async def stream_plan(
         if cancel_event is not None and cancel_event.is_set():
             return
         logger.exception("plan_id=%s failed", plan_id)
+        await record_plan(
+            plan_id=plan_id,
+            query=query,
+            slots=confirmed.model_dump() if confirmed is not None else None,
+            status="error",
+            timings={"total_ms": ms_since(t_total)},
+            artifact=None,
+            ok=False,
+        )
         yield {"type": "error", "message": str(exc)}

@@ -104,7 +104,9 @@ createApp({
     },
     canConfirmClarify() {
       if (this.loading) return false;
-      return CRITICAL_KEYS.every((k) => String(this.clarifyForm[k] || "").trim());
+      const keys = CRITICAL_KEYS.slice();
+      if ((this.missingFields || []).indexOf("lodging") !== -1) keys.push("lodging");
+      return keys.every((k) => String(this.clarifyForm[k] || "").trim());
     },
     queryLen() {
       return this.query.length;

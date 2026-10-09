@@ -22,9 +22,12 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-if sys.platform == "win32":
-    import locale as _locale
+import locale as _locale
 
+# 在改掉 getencoding 之前记下控制台代码页。shell 子进程（cmd/node）按这个写 stdout。
+CONSOLE_ENCODING = _locale.getpreferredencoding(False)
+
+if sys.platform == "win32":
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     # open() 未指定 encoding 时跟 locale 走；强制报 utf-8 减少中文路径踩坑
     _locale.getpreferredencoding = lambda do_setlocale=True: "utf-8"  # type: ignore[assignment,misc]
@@ -64,7 +67,9 @@ SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def configure_langsmith() -> None:
-    """有 LANGSMITH_API_KEY 则打开追踪，否则明确关闭。"""
+    """有 LANGSMITH_API_KEY 则打开追踪，否则明确关闭。显式 false 不被 Key 盖掉。"""
+    if (os.getenv("LANGSMITH_TRACING") or "").strip().lower() == "false":
+        return
     key = (os.getenv("LANGSMITH_API_KEY") or "").strip()
     if not key:
         os.environ["LANGSMITH_TRACING"] = "false"

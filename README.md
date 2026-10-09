@@ -1,14 +1,16 @@
 # 旅游规划多智能体
 
-用户输入一句自然语言旅游需求，系统完成 **景点筛选 / 路线地图 / 12306 车票建议 / 最终方案汇总**。
+![ci](https://github.com/gufeng66/luxingguihua/actions/workflows/ci.yml/badge.svg)
 
-架构说明见 [ARCHITECTURE.md](ARCHITECTURE.md)。评测怎么跑、哪些数字还没填，见 [EVALS.md](EVALS.md)。
+这个项目用旅行规划练多智能体编排里三件事：外部工具不可靠时怎么降级、成文阶段怎么拦住编造、子智能体执行时怎么挡住改文件和读密钥。一句自然语言需求，产出景点、路线地图和车票建议。
+
+可交互架构图：[docs/travel-planner-runtime.html](docs/travel-planner-runtime.html)。说明见 [ARCHITECTURE.md](ARCHITECTURE.md)。评测见 [EVALS.md](EVALS.md)。
 
 支持两种入口，共用同一套规划核心：
 
 | 入口 | 命令 | 说明 |
 |------|------|------|
-| Web | `python -m uvicorn server:app --reload --host 127.0.0.1 --port 8000` | FastAPI + Vue3，SSE 流式进度 |
+| Web | `python -m uvicorn server:app --reload --reload-exclude workspace --host 127.0.0.1 --port 8000` | FastAPI + Vue3，SSE 流式进度 |
 | CLI | `python app.py "你的需求"` | 控制台交互，支持澄清补槽 |
 
 ---
@@ -18,7 +20,7 @@
 - **自然语言理解**：抽取出发地、目的地、日期、天数、预算、偏好、节奏等槽位
 - **人机确认（HITL）**：出发地 / 目的地 / 日期缺失时弹出确认卡；软字段可预填默认值
 - **地图子智能体**：挂载本地高德 Skill，推荐景点、规划路线、生成地图 HTML
-- **车票子智能体**：经 12306 MCP 查车次与票价；不可用时降级，**禁止编造票务**
+- **车票子智能体**：接入提供 12306 数据的公开 MCP（ModelScope 演示端点）查车次与票价；不可用时降级，**禁止编造票务**
 - **流式汇总**：按固定六章节输出 Markdown；落盘前校验章节，无可靠票务时禁止车次号，失败重试一次，仍失败则降级
 - **用量**：`final.timings` 含 `prompt_tokens`、`completion_tokens`、`cost_usd`（单价见 `.env.example`，未设置时成本为 0）
 - **产物落盘**：方案写入 `workspace/results/`，地图写入 `workspace/results/maps/{plan_id}.html`
@@ -36,7 +38,7 @@ graph TD
     M --> A[map_agent]
     M --> B[ticket_agent]
     A --> Skill["amap-lbs-skill 只读"]
-    B --> MCP[12306 MCP]
+    B --> MCP["12306 数据 MCP（ModelScope 演示）"]
     A --> Sum[stream_summary 流式成文]
     B --> Sum
     Sum --> R[workspace/results 落盘]
@@ -45,11 +47,13 @@ graph TD
 
 | 组件 | 职责 |
 |------|------|
-| `main_agent` | 按已确认槽位调度 map / ticket（模型：Fit2Cloud `f2c-deepseek-v4-flash`） |
+| `main_agent` | 按已确认槽位调度 map / ticket（模型：DeepSeek `deepseek-flash`）。只发 task，不写最终长文 |
 | HITL | critical 槽位齐全才继续；soft 槽位可默认 |
-| `map_agent` | 景点 / 路线 / 地图 |
-| `ticket_agent` | 车次 / 票价；同城或明确自驾等可不查票 |
-| `stream_summary` | 编排层直接流式成文（不再经 DeepAgents task） |
+| `map_agent` | 景点 / 路线 / 地图。工具面只有只读高德 Skill 和该目录下的 shell |
+| `ticket_agent` | 车次 / 票价。工具面只有 12306 MCP；同城或明确自驾等不挂载 |
+| `stream_summary` | 编排层一次无工具调用，落盘前过闸门 |
+
+子智能体分开挂，是为了工具面隔离，不是为了多一段人设。见 [ADR-4](docs/adr/0004-subagent-is-tool-surface.md)。
 | 文件系统 | 智能体仅能访问 `/workspace/results`、`/workspace/config`、`/workspace/skills` |
 
 ---
@@ -99,11 +103,11 @@ cp .env.example .env
 
 | 服务 | 申请入口 | 环境变量 |
 |------|----------|----------|
-| Fit2Cloud | https://ai.fit2cloud.cn/gateway/v1 | `OPENAI_API_KEY`、`OPENAI_BASE_URL=https://ai.fit2cloud.cn/gateway/v1`（模型 `f2c-deepseek-v4-flash`） |
+| DeepSeek | https://api.deepseek.com | `OPENAI_API_KEY`、`OPENAI_BASE_URL=https://api.deepseek.com`（模型 `deepseek-flash`） |
 | 高德 Web 服务 | https://lbs.amap.com/api/webservice/create-project-and-key | `AMAP_WEBSERVICE_KEY` |
 | LangSmith（可选） | https://smith.langchain.com | `LANGSMITH_TRACING`、`LANGSMITH_API_KEY`、`LANGSMITH_PROJECT=travel-planner`；自动链接失败时再填 `LANGSMITH_ORG_ID` |
 
-同文件里还有：`CORS_ORIGINS`（默认同源 `127.0.0.1:8000`）、`MCP_12306_URL`（不填用公开地址）、`DISPATCH_TIMEOUT_SECONDS`（默认 360，只限制不需要地图时的主智能体）、`PLAN_RATE_PER_MINUTE`（默认每分钟 8 次）、`PLAN_API_KEY`（设置后 `POST /api/plan` 要求请求头 `X-API-Key`）、`TOKEN_USD_PER_M_IN` / `TOKEN_USD_PER_M_OUT`（每百万 token 美元单价，用于 `cost_usd`）。
+同文件里还有：`CORS_ORIGINS`（默认同源 `127.0.0.1:8000`）、`MCP_12306_URL`（不填则用 ModelScope 演示端点）、`DISPATCH_TIMEOUT_SECONDS`（默认 360，只限制不需要地图时的主智能体）、`PLAN_RATE_PER_MINUTE`（默认每分钟 8 次）、`PLAN_API_KEY`（设置后 `POST /api/plan` 要求请求头 `X-API-Key`）、`TOKEN_USD_PER_M_IN` / `TOKEN_USD_PER_M_OUT`（每百万 token 美元单价，用于 `cost_usd`）。
 
 也可把高德 Key 写入 `amap-lbs-skill/config.json`（由 `config.example.json` 复制），该文件已被 gitignore。`MCP_12306_URL` 的默认地址在 `planner/ticket_agent.py`。
 
@@ -112,7 +116,7 @@ cp .env.example .env
 **Web（推荐）：**
 
 ```bash
-python -m uvicorn server:app --reload --host 127.0.0.1 --port 8000
+python -m uvicorn server:app --reload --reload-exclude workspace --host 127.0.0.1 --port 8000
 ```
 
 浏览器打开：http://127.0.0.1:8000/
@@ -145,7 +149,11 @@ Web 首页 chips 与下列场景一一对应：点「跨城高铁」「租电车
 
 ### 耗时预算
 
-`DISPATCH_TIMEOUT_SECONDS`（默认 360）只在**不需要地图**时限制主智能体 `astream`。需要找景点时一直等到 map 写完或浏览器断开。MCP 最坏约 15s × 2 次重试；TTL 300s 内第二次规划会命中车票工具缓存（`ticket_cache_hit`）。并行只自证「同超步发出两个 task」，没有与串行对照的实测耗时。仅用户明确说不要地图/不要找景点时跳过 map。
+`DISPATCH_TIMEOUT_SECONDS`（默认 360）只在**不需要地图**时限制主智能体 `astream`。需要找景点时一直等到 map 写完或浏览器断开。MCP 最坏约 15s × 2 次重试；TTL 300s 内第二次规划会命中车票工具缓存（`ticket_cache_hit`）。冷启动和命中缓存分开记，不合成一个中位数。仅用户明确说不要地图/不要找景点时跳过 map。
+
+`FORCE_SERIAL=1` 把主提示改成先等 map 再调 ticket。提示词不保证模型照做。重叠用现成 timings：`map_ms + ticket_ms` 是串行下界，`dispatch_ms` 是并行墙钟，`map_ticket_active_delta_ms` 是两个子智能体开始时间差。若五次都压不成串行，结论就是控制要下沉到 dispatch，而不是靠提示词。对照数字在 [EVALS.md](EVALS.md)：parallel 模式 4/5 次同时发出，`FORCE_SERIAL=1` 五次都把开始时间拉开，调度墙钟没有因此变短。
+
+对抗用例只证明控制层会拦住这些字符串。模型会不会照着恶意指令做，这组用例没有证明。其余边界见下方「已知边界」。
 
 快照在 `workspace/results/snapshots/`（已 gitignore）。**不做自动 LRU**；目录膨胀时本地手动清理即可。
 
@@ -187,7 +195,8 @@ Web 首页 chips 与下列场景一一对应：点「跨城高铁」「租电车
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/` | 前端首页 |
-| GET | `/api/health` | `node`、高德 skill 目录、12306 MCP 是否可达；MCP 不可达时规划仍可降级 |
+| GET | `/api/health` | `node`、高德 skill 目录、12306 数据 MCP 是否可达；MCP 不可达时规划仍可降级 |
+| GET | `/api/plans` | 最近规划记录（延迟与状态）。设置 `PLAN_API_KEY` 时同样要求 `X-API-Key` |
 | GET | `/results/...` | 方案 / 地图静态文件 |
 
 ---
@@ -199,10 +208,11 @@ Web 首页 chips 与下列场景一一对应：点「跨城高铁」「租电车
 ├── planner_service.py      # 对外 API（CLI / Web / 测试入口）
 ├── planner/                # 规划实现（改逻辑看这里）
 │   ├── pipeline.py         # 一次规划的事件流
+│   ├── plans_store.py      # 规划记录（SQLite，失败不影响规划）
 │   ├── dispatch.py         # 主智能体 astream → SSE 进度
 │   ├── routing.py          # 查票 / 出地图 / 修订路由
 │   ├── map_agent.py        # 地图子智能体
-│   ├── ticket_agent.py     # 车票子智能体（12306 MCP）
+│   ├── ticket_agent.py     # 车票子智能体（ModelScope 上的 12306 数据 MCP）
 │   ├── ticket_cache.py     # MCP 连接缓存
 │   ├── summary.py          # 汇总成文与落盘
 │   ├── prompts.py          # 主智能体提示词
@@ -291,6 +301,16 @@ LANGSMITH_PROJECT=travel-planner
 9. **限流**：`POST /api/plan` 默认每分钟 8 次（单进程内存计数）。设置 `PLAN_API_KEY` 后必须带 `X-API-Key`
 
 ---
+
+## 已知边界
+
+- **Judge 自偏好**：`python -m evals.judge` 与被评模型是同一个网关模型。分数对照 snapshot 里的工具原文，不能当成独立评审。
+- **路由不泛化**：要不要查票、要不要出地图靠槽位和关键词（[ADR-2](docs/adr/0002-routing-is-rules.md)）。新说法要加关键词，不会自动泛化。
+- **沙箱不是容器**：shell 环境白名单挡住了继承密钥，挡不住读磁盘上的 `.env`，也没有出网白名单（[ADR-3](docs/adr/0003-shell-boundary.md)）。
+- **票务数据源是演示端点**：默认 12306 MCP 在 ModelScope，不是正式购票接口。
+- **车票缓存**：进程内、TTL 5 分钟。一次跨城规划通常长于 5 分钟，下一次完整规划不会命中。命中只出现在同一进程、300 秒内的第二次握手。
+- **`FORCE_SERIAL` 只改提示词**：不保证模型先等 map 再调 ticket。
+- **`parallel_dispatch` 几乎恒为 false**：ticket 比 map 早结束，结果不在同一条工具消息里，`parallel_results` 立不住。并行与否看 `map_ticket_active_delta_ms`，以及 `dispatch_ms` 相对 `map_ms + ticket_ms`。
 
 ## 安全说明
 

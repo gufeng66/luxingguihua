@@ -416,3 +416,63 @@ async def test_stream_plan_need_map_ignores_dispatch_timeout(monkeypatch: pytest
     assert not any(e.get("reason") == "dispatch_timeout" for e in map_steps)
     assert any(e.get("type") == "final" for e in events)
 
+
+@pytest.mark.asyncio
+async def test_stream_plan_writes_fallback_map(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """子智能体没落盘时，补写 HTML，汇总按有地图处理。"""
+    import planner.pipeline as pipeline
+    import planner_service as ps
+    from unittest.mock import AsyncMock, MagicMock
+
+    monkeypatch.setenv("TRAVEL_MAP_FALLBACK", "1")
+    monkeypatch.setattr(pipeline, "MAPS_DIR", tmp_path)
+    slots = TravelSlots(
+        origin="新乡",
+        destination="北京",
+        date="2026-10-10",
+        days=3,
+        budget="5000",
+        preferences="少折腾",
+        lodging="北京西站附近",
+    )
+    monkeypatch.setattr(ps, "extract_slots", AsyncMock(return_value=slots))
+    monkeypatch.setattr(ps, "get_ticket_agent", AsyncMock(return_value=None))
+    monkeypatch.setattr(ps, "build_llm", lambda: MagicMock())
+
+    def fake_ensure(plan_id, **_k):
+        (tmp_path / f"{plan_id}.html").write_text(
+            '<script id="amapTaskData" type="application/json">[]</script>',
+            encoding="utf-8",
+        )
+        return "高德地点检索补写的路线地图：\n- 第1天 天坛公园"
+
+    monkeypatch.setattr(pipeline, "ensure_route_map", fake_ensure)
+
+    async def fake_astream(*_a, **_k):
+        yield {
+            "model": {
+                "messages": [
+                    _fake_ai_message(
+                        tool_calls=[{"name": "task", "id": "m1", "args": {"subagent_type": "map_agent"}}]
+                    )
+                ]
+            }
+        }
+        yield {"tools": {"messages": [_fake_tool_message(content="未写文件", tool_call_id="m1")]}}
+
+    agent = MagicMock()
+    agent.astream = fake_astream
+    monkeypatch.setattr(ps, "create_deep_agent", lambda **_k: agent)
+
+    async def fake_summary(**kwargs):
+        assert kwargs.get("map_reason") == "ok"
+        assert "天坛公园" in kwargs.get("map_context", "")
+        yield {"type": "_summary_done", "content": "ok"}
+
+    monkeypatch.setattr(ps, "stream_summary", fake_summary)
+    events = [ev async for ev in ps.stream_plan("这周六从新乡坐高铁去北京3日游，预算 5000，少折腾，我住在北京西站附近")]
+    assert not any(e.get("code") == "map_no_html" for e in events)
+    assert any("补写路线地图" in str(e.get("message")) for e in events)
+    finals = [e for e in events if e.get("type") == "final"]
+    assert finals and str(finals[0].get("map_url", "")).endswith(".html")
+
