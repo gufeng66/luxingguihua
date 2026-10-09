@@ -29,7 +29,7 @@ from typing import Any
 from uuid import uuid4
 
 from planner.map_agent import map_agent
-from planner.map_fallback import days_from_query, destination_from_query, ensure_route_map
+from planner.map_fallback import days_from_query, destination_from_query, ensure_route_map, reorder_existing_map
 from slots import (
     TravelSlots,
     apply_soft_defaults,
@@ -377,15 +377,33 @@ async def stream_plan(
                 )
 
             map_file_now = MAPS_DIR / f"{plan_id}.html"
+            dest = (confirmed.destination if confirmed is not None else "") or destination_from_query(query)
+            stay = (confirmed.lodging if confirmed is not None else None) or lodging_from_query(query)
+            day_count = confirmed.days if confirmed is not None and confirmed.days else days_from_query(query)
             if need_map and not map_file_now.is_file():
-                dest = (confirmed.destination if confirmed is not None else "") or destination_from_query(query)
-                stay = (confirmed.lodging if confirmed is not None else None) or lodging_from_query(query)
-                day_count = confirmed.days if confirmed is not None and confirmed.days else days_from_query(query)
-                note = ensure_route_map(plan_id, destination=dest or "", days=day_count, lodging=stay)
+                note = ensure_route_map(
+                    plan_id,
+                    destination=dest or "",
+                    days=day_count,
+                    lodging=stay,
+                    need_ticket=need_ticket,
+                )
                 if note:
                     map_context = note
                     logger.warning("map_fallback plan_id=%s", plan_id)
                     yield {"type": "status", "message": "地图子智能体未写出文件，已用高德检索补写路线地图"}
+            elif need_map and map_file_now.is_file():
+                note = reorder_existing_map(
+                    plan_id,
+                    destination=dest or "",
+                    days=day_count,
+                    lodging=stay,
+                    need_ticket=need_ticket,
+                )
+                if note:
+                    prior = map_context.strip()
+                    map_context = note if not prior else f"{note}\n\n{prior}"
+                    yield {"type": "status", "message": "已重排每日景点顺序"}
             map_reason = resolve_map_state(
                 need_map=need_map,
                 dispatched=map_dispatched,

@@ -177,8 +177,10 @@ function stampPoiLabels(tasks) {
     if (!item || item.type !== "poi") return item;
     const key = coordKey(item.lnglat);
     if (!key) return item;
-    n += 1;
-    if (seen[key] == null) seen[key] = n;
+    if (seen[key] == null) {
+      n += 1;
+      seen[key] = n;
+    }
     return Object.assign({}, item, { label: seen[key] });
   });
 }
@@ -257,6 +259,14 @@ function _checkPoiLabels() {
     .filter((item) => item.type === "poi")
     .map((item) => item.label);
   if (labels.join(",") !== "1,2,1") throw new Error("poi labels " + labels.join(","));
+  const gap = stampPoiLabels([
+    { type: "poi", lnglat: [112.436284, 34.685924], text: "洛阳站" },
+    { type: "poi", lnglat: [112.436284, 34.685924], text: "洛阳站附近" },
+    { type: "poi", lnglat: [112.435579, 34.620466], text: "体育公园" },
+  ])
+    .filter((item) => item.type === "poi")
+    .map((item) => item.label);
+  if (gap.join(",") !== "1,1,2") throw new Error("poi gap " + gap.join(","));
 }
 
 if (typeof window === "undefined") _checkPoiLabels();

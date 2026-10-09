@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import urllib.parse
 import urllib.request
 
 from planner.paths import MAPS_DIR
+from planner.route_plan import format_day_list, plan_route
 from planner.summary import parse_plan_id
 from slots import days_from_query, destination_from_query, lodging_from_query
 
@@ -16,6 +18,7 @@ logger = logging.getLogger("travel_planner")
 
 _PLACE = "https://restapi.amap.com/v5/place/text"
 _PER_DAY = 3
+_TASK_RE = re.compile(r'<script id="amapTaskData" type="application/json">(.*?)</script>', re.S)
 
 
 def _lodging_hit(opener, city: str, lodging: str | None) -> dict | None:
@@ -78,70 +81,57 @@ def _search(opener, *, city: str, keywords: str, types: str, limit: int) -> list
     return found
 
 
-def _near(a: dict, b: dict) -> float:
-    return (a["lng"] - b["lng"]) ** 2 + (a["lat"] - b["lat"]) ** 2
+def _station_hit(opener, city: str, dest: str) -> dict | None:
+    text = (dest or "").strip()
+    if not text:
+        return None
+    for keywords in (f"{text}站", f"{text}高铁站"):
+        found = _search(opener, city=city, keywords=keywords, types="", limit=1)
+        if found:
+            return found[0]
+    return None
 
 
-def _chunks(sights: list[dict], days: int) -> list[list[dict]]:
-    days = max(1, int(days or 1))
-    sights = sights[: days * _PER_DAY]
-    if len(sights) >= days * _PER_DAY:
-        return [sights[i * _PER_DAY : (i + 1) * _PER_DAY] for i in range(days)]
-    base, extra = divmod(len(sights), days)
-    chunks: list[list[dict]] = []
-    index = 0
-    for day in range(days):
-        count = base + (1 if day < extra else 0)
-        chunks.append(sights[index : index + count])
-        index += count
-    return chunks
+def _named_lodging(sights: list[dict], lodging: str | None) -> dict | None:
+    text = (lodging or "").strip()
+    if not text:
+        return None
+    for poi in sights:
+        name = poi["name"]
+        if name == text or text in name or name in text:
+            hit = dict(poi)
+            hit["name"] = text
+            return hit
+    return None
 
 
-def _poi(day: int, poi: dict, remark: str) -> dict:
-    return {
-        "type": "poi",
-        "day": day,
-        "lnglat": [poi["lng"], poi["lat"]],
-        "sort": f"Day{day}",
-        "text": poi["name"],
-        "remark": remark,
-    }
-
-
-def _route(day: int, city: str, start: dict, end: dict) -> dict:
-    return {
-        "type": "route",
-        "day": day,
-        "routeType": "walking",
-        "start": [start["lng"], start["lat"]],
-        "end": [end["lng"], end["lat"]],
-        "city": city,
-        "remark": f"{start['name']}→{end['name']}",
-    }
-
-
-def _tasks(sights: list[dict], days: int, city: str, lodging: dict | None = None) -> list[dict]:
-    """每天从住宿地出发，结束回到住宿地。景点按离住宿地远近分天，每天最多 3 个。"""
-    # ponytail: 用经纬度平方距离排序，不是路网距离；景点多到需要分区再换路径规划
-    if lodging is not None:
-        sights = sorted(sights, key=lambda poi: _near(poi, lodging))
-    tasks: list[dict] = []
-    for day, group in enumerate(_chunks(sights, days), 1):
-        if not group and lodging is None:
+def _sights_from_html(html: str) -> list[dict]:
+    match = _TASK_RE.search(html or "")
+    if not match:
+        raise ValueError("no amapTaskData")
+    data = json.loads(match.group(1))
+    if not isinstance(data, list):
+        raise ValueError("not a list")
+    sights: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict) or item.get("type") != "poi":
             continue
-        seq = [lodging, *group, lodging] if lodging is not None else list(group)
-        prev = None
-        for index, poi in enumerate(seq):
-            remark = poi.get("address") or ""
-            if lodging is not None and index == len(seq) - 1 and len(seq) > 1:
-                remark = "返回住宿地"
-            elif lodging is not None and index == 0:
-                remark = "从住宿地出发"
-            tasks.append(_poi(day, poi, remark))
-            if prev is not None:
-                tasks.append(_route(day, city, prev, poi))
-            prev = poi
-    return tasks
+        lnglat = item.get("lnglat")
+        if not isinstance(lnglat, (list, tuple)) or len(lnglat) != 2:
+            continue
+        name = str(item.get("text") or "").strip()
+        if not name:
+            continue
+        try:
+            lng, lat = float(lnglat[0]), float(lnglat[1])
+        except (TypeError, ValueError):
+            continue
+        sights.append({"name": name, "lng": lng, "lat": lat, "address": str(item.get("remark") or "")})
+    return sights
+
+
+def _itinerary_note(tasks: list[dict], *, head: str) -> str:
+    return head + "：\n" + format_day_list(tasks) + "\n行程表顺序以清单为准。"
 
 
 def render_map_html(tasks: list[dict]) -> str:
@@ -172,6 +162,7 @@ def ensure_route_map(
     destination: str,
     days: int = 1,
     lodging: str | None = None,
+    need_ticket: bool = False,
     opener=None,
 ) -> str | None:
     """写出 maps/{{plan_id}}.html。成功返回给汇总用的景点清单，失败返回 None。"""
@@ -196,15 +187,54 @@ def ensure_route_map(
     if not sights:
         logger.warning("map_fallback empty plan_id=%s city=%s", pid, city)
         return None
-    tasks = _tasks(sights, days, city, lodging=stay)
+    station = _station_hit(open_url, city, city) if need_ticket and stay is not None else None
+    tasks = plan_route(sights, days, city, lodging=stay, station=station)
+    if not tasks:
+        logger.warning("map_fallback empty plan_id=%s city=%s", pid, city)
+        return None
     path = MAPS_DIR / f"{pid}.html"
     path.write_text(render_map_html(tasks), encoding="utf-8")
-    by_day: dict[int, list[str]] = {}
-    for item in tasks:
-        if item["type"] == "poi":
-            by_day.setdefault(item["day"], []).append(item["text"])
-    lines = [f"- 第{day}天：" + " → ".join(names) for day, names in sorted(by_day.items())]
     head = "高德地点检索补写的路线地图"
     if stay is not None:
         head += "（每天从住宿地出发，结束回到住宿地）"
-    return head + "：\n" + "\n".join(lines)
+    return _itinerary_note(tasks, head=head)
+
+
+def reorder_existing_map(
+    plan_id: str,
+    *,
+    destination: str,
+    days: int = 1,
+    lodging: str | None = None,
+    need_ticket: bool = False,
+    opener=None,
+) -> str | None:
+    """已有地图 HTML 时按坐标重排并覆盖。解析失败或没有景点时不写文件，返回 None。"""
+    pid = parse_plan_id(plan_id)
+    if pid is None:
+        return None
+    path = MAPS_DIR / f"{pid}.html"
+    if not path.is_file():
+        return None
+    raw = path.read_text(encoding="utf-8")
+    try:
+        sights = _sights_from_html(raw)
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if not sights:
+        return None
+    city = (destination or "").strip()
+    live = os.getenv("TRAVEL_MAP_FALLBACK") != "0"
+    open_url = opener or urllib.request.urlopen
+    stay = _named_lodging(sights, lodging)
+    if stay is None and live and city:
+        stay = _lodging_hit(open_url, city, lodging)
+    station = _station_hit(open_url, city, city) if need_ticket and stay is not None and live and city else None
+    tasks = plan_route(sights, days, city, lodging=stay, station=station)
+    if not tasks:
+        return None
+    path.write_text(render_map_html(tasks), encoding="utf-8")
+    head = "按坐标重排的路线"
+    if stay is not None:
+        head += "（每天从住宿地出发，结束回到住宿地）"
+    return _itinerary_note(tasks, head=head)

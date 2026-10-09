@@ -1,0 +1,14 @@
+d1_a_station_to_hotel [walking] dur=209s dist=261m
+d1_b_hotel_to_lijingmen [transfer] dur=2204s cost=2.0 walk=834 segs=3
+d1_c_lijingmen_to_yingtianmen [transfer] dur=1711s cost=2.0 walk=1027 segs=2
+d1_d_yingtianmen_to_mingtang [walking] dur=705s dist=881m
+d1_e_mingtang_to_cross [transfer] dur=2157s cost=2.0 walk=1262 segs=2
+d1_f_cross_to_hotel [transfer] dur=2100s cost=1.0 walk=528 segs=2
+d2_a_hotel_to_museum [transfer] dur=2151s cost=2.0 walk=1211 segs=2
+d2_b_museum_to_longmen [transfer] dur=4770s cost=2.5 walk=1809 segs=3
+d2_c_longmen_to_guanlin [transfer] dur=4284s cost=1.5 walk=3131 segs=2
+d2_d_guanlin_to_hotel [transfer] dur=3974s cost=3.0 walk=2170 segs=2
+d3_a_hotel_to_baimasi [transfer] dur=5027s cost=1.5 walk=1151 segs=2
+d3_b_baimasi_to_wangcheng [transfer] dur=4506s cost=6.0 walk=1615 segs=3
+d3_c_wangcheng_to_hotel [transfer] dur=2236s cost=2.0 walk=1105 segs=3
+d3_d_hotel_to_station [walking] dur=209s dist=261m

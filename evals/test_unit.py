@@ -378,7 +378,119 @@ def test_ensure_route_map_writes_html(tmp_path, monkeypatch: pytest.MonkeyPatch)
         assert names[0] == "北京西站" and names[-1] == "北京西站"
         assert len(names) >= 3
     assert "返回住宿地" in html
+    stay_xy = [116.322, 39.895]
+    ordered: dict[int, list[dict]] = {}
+    for item in data:
+        if item["type"] == "poi":
+            ordered.setdefault(item["day"], []).append(item)
+    for pois in ordered.values():
+        assert pois[0]["lnglat"] == stay_xy and pois[-1]["lnglat"] == stay_xy
     assert fb.ensure_route_map("../x", destination="北京", opener=opener) is None
+
+
+def _bearing_point(origin: dict, deg: float, radius: float = 0.05) -> dict:
+    import math
+
+    rad = math.radians(deg)
+    scale = math.cos(math.radians(origin["lat"]))
+    return {
+        "lng": origin["lng"] + radius * math.cos(rad) / scale,
+        "lat": origin["lat"] + radius * math.sin(rad),
+    }
+
+
+def test_plan_route_keeps_equal_clusters_and_is_stable() -> None:
+    """等量切分只在两簇数量相同时不拆簇。方位角取 atan2 的连续区间，避开 ±180° 接缝。"""
+    from planner.route_plan import plan_route
+
+    lodging = {"name": "住宿", "lng": 116.4, "lat": 39.9, "address": ""}
+    east = [_bearing_point(lodging, deg) | {"name": f"东{i}", "address": ""} for i, deg in enumerate((0, 20, 40))]
+    north = [_bearing_point(lodging, deg) | {"name": f"北{i}", "address": ""} for i, deg in enumerate((120, 150, 180))]
+    sights = east + north
+    first = plan_route(sights, 2, "北京", lodging=lodging)
+    assert first == plan_route(sights, 2, "北京", lodging=lodging)
+    by_day: dict[int, list[dict]] = {}
+    for item in first:
+        if item["type"] == "poi":
+            assert item["sort"] == f"Day{item['day']}"
+            by_day.setdefault(item["day"], []).append(item)
+    assert set(by_day) == {1, 2}
+    stay = [lodging["lng"], lodging["lat"]]
+    assert {poi["text"] for poi in by_day[1][1:-1]} == {"东0", "东1", "东2"}
+    assert {poi["text"] for poi in by_day[2][1:-1]} == {"北0", "北1", "北2"}
+    for pois in by_day.values():
+        assert pois[0]["lnglat"] == stay and pois[-1]["lnglat"] == stay
+        assert pois[0]["remark"] == "从住宿地出发" and pois[-1]["remark"] == "返回住宿地"
+
+
+def test_plan_route_merges_station_at_lodging() -> None:
+    from planner.route_plan import plan_route
+
+    lodging = {"name": "洛阳站附近", "lng": 112.436284, "lat": 34.685924, "address": ""}
+    station = {"name": "洛阳站", "lng": 112.436284, "lat": 34.685924, "address": "玄武门大街"}
+    sights = [{"name": "体育公园", "lng": 112.435579, "lat": 34.620466, "address": ""}]
+    tasks = plan_route(sights, 1, "洛阳", lodging=lodging, station=station)
+    pois = [item["text"] for item in tasks if item["type"] == "poi"]
+    assert pois == ["洛阳站附近", "体育公园", "洛阳站附近"]
+    assert all(item["start"] != item["end"] for item in tasks if item["type"] == "route")
+
+
+def test_plan_route_skips_empty_days() -> None:
+    from planner.route_plan import plan_route
+
+    lodging = {"name": "住宿", "lng": 116.4, "lat": 39.9, "address": ""}
+    sights = [
+        {"name": "甲", "lng": 116.45, "lat": 39.9, "address": ""},
+        {"name": "乙", "lng": 116.35, "lat": 39.9, "address": ""},
+    ]
+    tasks = plan_route(sights, 3, "北京", lodging=lodging)
+    assert {item["day"] for item in tasks} == {1, 2}
+    for item in tasks:
+        if item["type"] == "route":
+            assert item["start"] != item["end"]
+
+
+def test_reorder_maps_poi_fields_and_keeps_bad_json(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import planner.map_fallback as fb
+
+    monkeypatch.setattr(fb, "MAPS_DIR", tmp_path)
+    pid = "22222222-2222-2222-2222-222222222222"
+    path = tmp_path / f"{pid}.html"
+    path.write_text(
+        fb.render_map_html(
+            [
+                {"type": "poi", "day": 1, "lnglat": [116.32, 39.89], "sort": "Day1", "text": "酒店", "remark": "住"},
+                {
+                    "type": "route",
+                    "day": 1,
+                    "routeType": "walking",
+                    "start": [1, 2],
+                    "end": [3, 4],
+                    "city": "北京",
+                    "remark": "不应成为景点",
+                },
+                {"type": "poi", "day": 1, "lnglat": [116.4, 39.9], "sort": "Day1", "text": "天坛", "remark": "东"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    note = fb.reorder_existing_map(pid, destination="北京", days=1, lodging="酒店", need_ticket=False)
+    html = path.read_text(encoding="utf-8")
+    assert note and "行程表顺序以清单为准" in note and "天坛" in note
+    assert "返回住宿地" in html and "不应成为景点" not in html
+    ctx = "原文"
+    bad = tmp_path / "33333333-3333-3333-3333-333333333333.html"
+    bad.write_text('<script id="amapTaskData" type="application/json">{bad</script>', encoding="utf-8")
+    before = bad.read_text(encoding="utf-8")
+    parsed = fb.reorder_existing_map(
+        "33333333-3333-3333-3333-333333333333",
+        destination="北京",
+        days=1,
+        lodging="酒店",
+    )
+    if parsed:
+        ctx = parsed
+    assert parsed is None and bad.read_text(encoding="utf-8") == before and ctx == "原文"
 
 
 def test_map_agent_prompt_amap_task_data_contract() -> None:
