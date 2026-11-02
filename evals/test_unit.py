@@ -221,7 +221,7 @@ def test_main_prompt_requires_parallel_and_intent_priority() -> None:
     assert "车票服务不可用" not in built
     assert "{ticket_patch}" not in built
     assert "{map_patch}" not in built
-    assert "必须把路线地图 HTML" in built
+    assert "候选 JSON" in built
 
     built_off = _build_main_prompt(
         ticket_available=False,
@@ -239,7 +239,7 @@ def test_main_prompt_requires_parallel_and_intent_priority() -> None:
         slots=TravelSlots(origin="新乡", destination="洛阳", date="2026-09-26", days=1),
     )
     assert "不要调用 ticket_agent" in no_rail or "禁止调用 ticket_agent" in no_rail
-    assert "amapTaskData" in no_rail
+    assert "候选 JSON" in no_rail
 
 
 def test_slots_from_query_keeps_lodging_and_saturday() -> None:
@@ -496,15 +496,10 @@ def test_reorder_maps_poi_fields_and_keeps_bad_json(tmp_path, monkeypatch: pytes
 def test_map_agent_prompt_amap_task_data_contract() -> None:
     from planner.map_agent import MAP_AGENT_PROMPT
 
-    assert "amapTaskData" in MAP_AGENT_PROMPT
-    assert '"day":1' in MAP_AGENT_PROMPT or "day\":1" in MAP_AGENT_PROMPT
-    assert "application/json" in MAP_AGENT_PROMPT
-    assert "overscroll-behavior" in MAP_AGENT_PROMPT
-    assert "encodeURIComponent" in MAP_AGENT_PROMPT
-    assert "percent-encoding" in MAP_AGENT_PROMPT
-    assert "uri.amap.com/marker" in MAP_AGENT_PROMPT
-    assert "amapApp" in MAP_AGENT_PROMPT
-    assert "参考坐标" in MAP_AGENT_PROMPT
+    assert "JSON" in MAP_AGENT_PROMPT
+    assert "amapTaskData" not in MAP_AGENT_PROMPT
+    assert "参考坐标" not in MAP_AGENT_PROMPT
+    assert "不要编造坐标" in MAP_AGENT_PROMPT
 
 
 def test_map_iframe_sandbox_allows_amap_popups() -> None:

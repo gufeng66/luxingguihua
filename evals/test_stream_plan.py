@@ -321,7 +321,9 @@ async def test_map_only_revision_skips_extract_and_ticket(monkeypatch: pytest.Mo
             "answer": "## 需求摘要\n旧方案",
         }
     )
-    extract_mock = AsyncMock(side_effect=AssertionError("extract_slots 不应被调用"))
+    from slots import ExtractedSlots
+
+    extract_mock = AsyncMock(return_value=ExtractedSlots(avoid=["龙门石窟"], must_visit=["白马寺"]))
     ticket_mock = AsyncMock(side_effect=AssertionError("get_ticket_agent 不应被调用"))
     monkeypatch.setattr(ps, "extract_slots", extract_mock)
     monkeypatch.setattr(ps, "get_ticket_agent", ticket_mock)
@@ -354,15 +356,19 @@ async def test_map_only_revision_skips_extract_and_ticket(monkeypatch: pytest.Mo
             parent_plan_id=pid,
         )
     ]
-    extract_mock.assert_not_called()
+    extract_mock.assert_called_once()
     ticket_mock.assert_not_called()
+    slots_event = next(e for e in events if e.get("type") == "slots")
+    assert slots_event["slots"]["avoid"] == ["龙门石窟"]
+    assert slots_event["slots"]["must_visit"] == ["白马寺"]
+    assert slots_event["slots"]["origin"] == "新乡"
     understand = next(e for e in events if e.get("type") == "step" and e.get("id") == "understand")
     assert understand["label"] == "修订需求"
     assert understand["status"] == "active"
 
 
 @pytest.mark.asyncio
-async def test_stream_plan_need_map_ignores_dispatch_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stream_plan_map_uses_dispatch_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
@@ -380,7 +386,8 @@ async def test_stream_plan_need_map_ignores_dispatch_timeout(monkeypatch: pytest
     monkeypatch.setattr(ps, "extract_slots", AsyncMock(return_value=slots))
     monkeypatch.setattr(ps, "get_ticket_agent", AsyncMock(return_value=None))
     monkeypatch.setattr(ps, "build_llm", lambda: MagicMock())
-    monkeypatch.setenv("DISPATCH_TIMEOUT_SECONDS", "0.2")
+    monkeypatch.setenv("DISPATCH_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("TRAVEL_MAP_FALLBACK", "0")
 
     async def fake_astream(*_a, **_k):
         yield {
@@ -392,7 +399,7 @@ async def test_stream_plan_need_map_ignores_dispatch_timeout(monkeypatch: pytest
                 ]
             }
         }
-        await asyncio.sleep(0.4)
+        await asyncio.sleep(1.3)
         yield {
             "tools": {
                 "messages": [_fake_tool_message(content="已写地图 HTML", tool_call_id="m1")]
@@ -404,16 +411,14 @@ async def test_stream_plan_need_map_ignores_dispatch_timeout(monkeypatch: pytest
     monkeypatch.setattr(ps, "create_deep_agent", lambda **_k: agent)
 
     async def fake_summary(**kwargs):
-        assert kwargs.get("map_reason") in ("ok", "incomplete")
+        assert kwargs.get("map_reason") == "timeout"
         yield {"type": "_summary_done", "content": "ok"}
 
     monkeypatch.setattr(ps, "stream_summary", fake_summary)
     events = [ev async for ev in ps.stream_plan("这周六从新乡坐高铁去郑州一日游")]
-    assert not any(e.get("code") == "map_dispatch_timeout" for e in events)
-    assert not any(e.get("code") == "map_not_dispatched" for e in events)
+    assert any(e.get("code") == "map_dispatch_timeout" for e in events)
     map_steps = [e for e in events if e.get("type") == "step" and e.get("id") == "map"]
-    assert any(e.get("status") == "done" for e in map_steps)
-    assert not any(e.get("reason") == "dispatch_timeout" for e in map_steps)
+    assert any(e.get("reason") == "dispatch_timeout" for e in map_steps)
     assert any(e.get("type") == "final" for e in events)
 
 
@@ -439,14 +444,28 @@ async def test_stream_plan_writes_fallback_map(tmp_path, monkeypatch: pytest.Mon
     monkeypatch.setattr(ps, "get_ticket_agent", AsyncMock(return_value=None))
     monkeypatch.setattr(ps, "build_llm", lambda: MagicMock())
 
-    def fake_ensure(plan_id, **_k):
-        (tmp_path / f"{plan_id}.html").write_text(
-            '<script id="amapTaskData" type="application/json">[]</script>',
-            encoding="utf-8",
-        )
-        return "高德地点检索补写的路线地图：\n- 第1天 天坛公园"
+    async def fake_assemble(**_k):
+        return {
+            "plan": {
+                "days": [{"day": 1, "date": "2026-10-10", "items": [{"name": "天坛公园", "role": "visit"}], "notes": []}],
+                "conflicts": [],
+                "notes": [],
+                "schedule_status": "candidate",
+            },
+            "tasks": [{"type": "poi", "text": "天坛公园", "lnglat": [116.4, 39.9]}],
+            "unlocated": [],
+            "facts_status": "unavailable",
+            "facts": [{"source_url": "https://www.dpm.org.cn/visit", "status": "pending"}],
+            "search_attempts": 0,
+            "search_error": None,
+            "search_usage": None,
+            "route_error": None,
+            "candidates": [{"poi_id": "tt", "name": "天坛公园"}],
+            "constraints": {"city": "北京"},
+            "context": "高德地点检索补写的路线地图：\n- 第1天 天坛公园",
+        }
 
-    monkeypatch.setattr(pipeline, "ensure_route_map", fake_ensure)
+    monkeypatch.setattr(pipeline, "assemble_itinerary", fake_assemble)
 
     async def fake_astream(*_a, **_k):
         yield {

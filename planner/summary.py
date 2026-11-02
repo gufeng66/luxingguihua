@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
@@ -37,6 +38,7 @@ SUMMARY_AGENT_PROMPT = """
 3. 必须按以下六个章节标题输出（使用 Markdown ## 标题）：需求摘要、景点建议、车票建议、预算、行程表、注意事项
 4. 保持简洁，不重复原始数据
 5. 若某一路结果标注暂缺或服务不可用：对应章节如实说明，禁止编造车次号、票价、发车时刻或未检索到的景点细节
+6. 行程表一节会被系统替换。不要另写一套时刻表；景点与交通以【地图子智能体结果】里的规范行程为准
 """
 
 
@@ -77,9 +79,33 @@ def ticket_summary_block(
     )
 
 
-def map_summary_block(map_reason: MapState, map_context: str) -> str:
-    """按地图态生成给汇总模型看的约束段落（缺图时禁止编景点细节）。"""
+def replace_itinerary_section(text: str, body: str) -> str:
+    """用程序行程替换「行程表」章节。多份只留一份；没有标题就补一节。"""
+    block = "## 行程表\n" + (body or "").strip() + "\n\n"
+    parts = re.split(r"(?=^##\s+)", text or "", flags=re.M)
+    seen = False
+    replaced = False
+    out: list[str] = []
+    for part in parts:
+        first = part.strip().splitlines()[0] if part.strip() else ""
+        if re.match(r"##\s+行程表\s*$", first):
+            if seen:
+                continue
+            seen = True
+            replaced = True
+            out.append(block)
+            continue
+        out.append(part)
+    if not replaced:
+        out.append("\n" + block)
+    return "".join(out).strip() + "\n"
+
+
+def map_summary_block(map_reason: MapState, map_context: str, *, plan_ready: bool = False) -> str:
+    """规范行程优先。没有 HTML 时，不再把正文候选当成最终方案。"""
     body = map_context.strip()
+    if plan_ready and body:
+        return body
     if map_reason == "ok" and body:
         return body
     if map_reason == "ok":
@@ -126,6 +152,16 @@ def save_snapshot(payload: dict[str, Any]) -> None:
     SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
     path = snapshot_path(str(payload["plan_id"]))
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def reusable_itinerary(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+    """旧快照没有结构化 days 时，不能把 HTML 当成已核实行程。"""
+    if not isinstance(snapshot, dict):
+        return None
+    plan = snapshot.get("itinerary")
+    if isinstance(plan, dict) and plan.get("days"):
+        return plan
+    return None
 
 
 def load_snapshot(plan_id: str) -> dict[str, Any] | None:
@@ -216,6 +252,7 @@ async def stream_summary(
     ticket_context: str,
     ticket_reason: TicketState,
     map_reason: MapState = "missed",
+    plan_ready: bool = False,
     previous_answer: str | None = None,
     revision_forbid_old_tickets: bool = False,
     gate_feedback: str | None = None,
@@ -226,7 +263,7 @@ async def stream_summary(
         if slots is not None
         else "（槽位未结构化确认，请根据用户原话理解）"
     )
-    map_block = map_summary_block(map_reason, map_context)
+    map_block = map_summary_block(map_reason, map_context, plan_ready=plan_ready)
     ticket_block = ticket_summary_block(ticket_reason, ticket_context)
     parts = [
         f"用户原话 / 修改意见：{query}\n",

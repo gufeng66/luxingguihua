@@ -24,6 +24,13 @@ const STEP_DEFS = [
 ];
 
 const CRITICAL_KEYS = ["origin", "destination", "date"];
+
+function nameList(text) {
+  return String(text || "")
+    .split(/[,，、]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
 const SLOT_LABELS = {
   origin: "出发地",
   destination: "目的地",
@@ -33,6 +40,9 @@ const SLOT_LABELS = {
   preferences: "偏好",
   pace: "出行节奏",
   lodging: "住宿地",
+  must_visit: "必去",
+  avoid: "不去",
+  transport_mode: "市内交通",
 };
 
 
@@ -76,6 +86,9 @@ createApp({
         preferences: "",
         pace: "",
         lodging: "",
+        must_visit: "",
+        avoid: "",
+        transport_mode: "public_transit",
       },
       missingFields: [],
       defaultsApplied: [],
@@ -592,6 +605,9 @@ createApp({
           preferences: s.preferences || "",
           pace: s.pace || "",
           lodging: s.lodging || "",
+          must_visit: Array.isArray(s.must_visit) ? s.must_visit.join("、") : (s.must_visit || ""),
+          avoid: Array.isArray(s.avoid) ? s.avoid.join("、") : (s.avoid || ""),
+          transport_mode: s.transport_mode || "public_transit",
         };
         return;
       }
@@ -733,6 +749,9 @@ createApp({
         preferences: String(this.clarifyForm.preferences || "").trim() || "经典景点 + 少折腾",
         pace: String(this.clarifyForm.pace || "").trim() || "舒适型节奏",
         lodging: String(this.clarifyForm.lodging || "").trim() || null,
+        must_visit: nameList(this.clarifyForm.must_visit),
+        avoid: nameList(this.clarifyForm.avoid),
+        transport_mode: this.clarifyForm.transport_mode || "public_transit",
       };
       try {
         await this.consumeSse(

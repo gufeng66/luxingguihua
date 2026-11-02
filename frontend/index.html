@@ -56,15 +56,20 @@
         <h2 class="section-title">请确认旅行参数</h2>
         <p class="clarify-hint">标红项为关键信息，补全后才能继续；灰色标注为未提供时的默认值，可直接改或点继续。</p>
         <div class="clarify-grid">
-          <label v-for="key in ['origin','destination','lodging','date','days','budget','preferences','pace']" :key="key"
+          <label v-for="key in ['origin','destination','lodging','date','days','budget','preferences','pace','must_visit','avoid','transport_mode']" :key="key"
             :class="{ 'is-critical-missing': isCriticalMissing(key) }">
             <span class="field-label">
               {{ slotLabel(key) }}
               <em v-if="isDefaultApplied(key)" class="default-tag">未提供，已用默认</em>
             </span>
-            <input v-if="key !== 'days' && key !== 'preferences'" v-model="clarifyForm[key]" :type="key === 'date' ? 'date' : 'text'" />
+            <select v-if="key === 'transport_mode'" v-model="clarifyForm.transport_mode">
+              <option value="public_transit">公共交通</option>
+              <option value="driving">自驾</option>
+              <option value="walking">步行</option>
+            </select>
+            <textarea v-else-if="key === 'must_visit' || key === 'avoid' || key === 'preferences'" v-model="clarifyForm[key]" rows="2"></textarea>
             <input v-else-if="key === 'days'" v-model.number="clarifyForm.days" type="number" min="1" max="30" />
-            <textarea v-else v-model="clarifyForm.preferences" rows="2"></textarea>
+            <input v-else v-model="clarifyForm[key]" :type="key === 'date' ? 'date' : 'text'" />
           </label>
         </div>
         <div class="actions">

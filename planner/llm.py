@@ -27,7 +27,7 @@ from planner.usage import note_llm
 logger = logging.getLogger("travel_planner")
 
 _COORD = re.compile(r"\d{2,3}\.\d+\s*[,，]\s*\d{2,3}\.\d+")
-_TOOL_STUB = "工具结果已省略。请按任务书用参考坐标写完地图 HTML，不要再查询。"
+_TOOL_STUB = "工具结果已省略。只根据已看到的景点名称返回候选 JSON，不要编造坐标或 poi_id。"
 
 
 def _is_content_risk(exc: BaseException) -> bool:
@@ -122,7 +122,7 @@ async def extract_slots(
     llm: Any,
     *,
     today: date | str | None = None,
-) -> TravelSlots:
+) -> ExtractedSlots:
     """结构化抽取旅行槽位；失败由调用方捕获并降级。"""
     base = _parse_today(today)
     prompt = SLOT_EXTRACT_PROMPT.format(
@@ -139,6 +139,9 @@ async def extract_slots(
     if isinstance(packed, dict) and "parsed" in packed:
         note_llm(packed.get("raw"))
         result = packed.get("parsed")
+        if result is None:
+            # 解析失败时 packed["raw"].content 仍是完整 JSON，报错要说清是校验挂了，别让它退化成 None 崩溃
+            raise ValueError(f"槽位结构化解析失败：{packed.get('parsing_error')}")
     else:
         result = packed
     if not isinstance(result, (ExtractedSlots, dict)):

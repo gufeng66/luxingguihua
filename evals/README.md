@@ -31,4 +31,4 @@ pytest -m integration evals/test_integration.py -q
 - 五态优先级、六章节、车票节禁编造
 - 并行同超步、自驾不连 MCP、missed warning
 - `watch_aiter` 超时 aclose
-- `plan_id` UUID 校验；map_only 修订不抽槽不连 MCP
+- `plan_id` UUID 校验；map_only 修订会抽取必去/不去/交通方式，不连 MCP

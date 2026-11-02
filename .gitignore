@@ -83,6 +83,18 @@ package-lock.json.bak
 /test_out.txt
 /large_tool_results/
 
+# 高德目录里的本地探测产物。源码只留 index.js、scripts、package*
+amap-lbs-skill/*.json
+!amap-lbs-skill/package.json
+!amap-lbs-skill/package-lock.json
+!amap-lbs-skill/config.example.json
+amap-lbs-skill/*.txt
+amap-lbs-skill/scripts/_*.js
+amap-lbs-skill/%SystemDrive%/
+amap-lbs-skill/-p/
+amap-lbs-skill/echo/
+amap-lbs-skill/done/
+
 # ----- 测试 / 类型检查 / 覆盖率 -----
 .pytest_cache/
 .mypy_cache/

@@ -17,6 +17,7 @@ pytest -q -m "not integration"
 | MCP 连不上 | 同上 | `get_ticket_agent` 返回空，ticket 步骤 `mcp_unavailable` |
 | 没调度 map | 同上 | `map_not_dispatched`，且没有 `map_url` |
 | 路由与五态 | `evals/test_routing.py`、`evals/test_unit.py` | 离线 |
+| 闭馆改路线、地图与行程表一致 | `evals/test_itinerary.py` | 注入证据和耗时，不访问 Tavily / 高德 |
 | token | `final.timings` 的 `prompt_tokens` / `completion_tokens` / `cost_usd` | `cost_usd` 在设置 `TOKEN_USD_PER_M_IN`、`TOKEN_USD_PER_M_OUT` 之前为 0 |
 
 ## 黄金集
@@ -65,3 +66,16 @@ HITL 第一轮「周末去郑州玩」3 次都没有停在确认卡（`hit_clari
 | serial（`FORCE_SERIAL=1`） | 0 / 5（最小约 371 秒） | 719907 | 1431546 |
 
 提示词能把开始时间拉开：serial 五次都不是同 turn。墙钟没有省出一截。parallel 五次里只有 1 次 `dispatch_ms` 低于当次 `map_ms + ticket_ms`，而且只少约 11 秒；另外 4 次调度墙钟高于这个下界，因为主智能体在两次工具之外还有耗时。两种模式的 `dispatch_ms` 中位只差约 1 分钟，小于单次之间的波动。
+
+## 复核（2026-10-12）
+
+上面两条结论在当前代码上已不成立，跑批早于 `cda0fb1`（2026-10-09「更新规划流水线、评测与前端」）引入的槽位澄清机制。
+
+1. **HITL 第一轮会停在确认卡**。「缺出发地 / 目的地 / 日期，或多日行程缺住宿地就要求确认」是 `clarify_missing()`（`slots.py`）在 `cda0fb1` 里才加的。现在端到端实跑 `周末去郑州玩` 拿到 `clarify`（`missing=[origin, date]`）且无 `final`。
+2. **耗时、成本与 judge 评分都基于旧流水线**。10-09 起住宿地成了多日行程的必答项，两日用例首轮不再直接出方案，旧数字不能当基线对照。
+
+`evals/golden.json` 的 `xinxiang_drive_luoyang` 已改成两轮（先 `clarify`，再带 `slots` 跑满），`README.md` 验收场景 2 同步。要新数字得重跑：
+
+```bash
+python -m evals.run_golden
+```

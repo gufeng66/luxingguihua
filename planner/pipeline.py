@@ -29,7 +29,14 @@ from typing import Any
 from uuid import uuid4
 
 from planner.map_agent import map_agent
-from planner.map_fallback import days_from_query, destination_from_query, ensure_route_map, reorder_existing_map
+from planner.route_plan import itinerary_markdown
+from planner.map_fallback import (
+    assemble_itinerary,
+    days_from_query,
+    destination_from_query,
+    parse_candidates,
+    render_map_html,
+)
 from slots import (
     TravelSlots,
     apply_soft_defaults,
@@ -38,6 +45,7 @@ from slots import (
     lodging_from_query,
     lodging_route_rules,
     should_clarify,
+    slots_for_plan,
     slots_from_query,
 )
 
@@ -59,6 +67,8 @@ from planner.summary import (
     degraded_plan,
     load_snapshot,
     parse_plan_id,
+    replace_itinerary_section,
+    reusable_itinerary,
     rewrite_plan_ids,
     save_plan,
     save_snapshot,
@@ -76,6 +86,13 @@ def _svc():
     import planner_service as svc
 
     return svc
+
+
+def _copy_map(parent_id: str, plan_id: str) -> None:
+    src = MAPS_DIR / f"{parent_id}.html"
+    dst = MAPS_DIR / f"{plan_id}.html"
+    if parent_id and src.is_file():
+        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
 
 
 def _clarify_event(slots: TravelSlots) -> dict[str, Any]:
@@ -141,6 +158,14 @@ async def stream_plan(
     map_context = ""
     ticket_reason = "skipped"
     ticket_context = ""
+    itinerary: dict[str, Any] | None = None
+    facts_status = "unavailable"
+    search_error = None
+    route_error = None
+    saved_candidates = None
+    saved_constraints = None
+    saved_facts = None
+    saved_search_usage = None
 
     try:
         # —— 修订：读上一版快照，判定改地图 / 改票 / 只改文案 ——
@@ -172,8 +197,18 @@ async def stream_plan(
 
         llm = svc.build_llm()
 
-        if revision_kind in ("map_only", "summary_only"):
+        if revision_kind == "summary_only":
             confirmed = TravelSlots.model_validate(snapshot.get("slots") or {})
+            confirmed, _ = apply_soft_defaults(confirmed)
+            yield {"type": "slots", "slots": confirmed.model_dump()}
+        elif revision_kind == "map_only":
+            base = TravelSlots.model_validate(snapshot.get("slots") or {})
+            try:
+                overlay = await svc.extract_slots(query, llm)
+                confirmed = merge_slots(base, overlay)
+            except Exception:
+                logger.exception("map_revision_extract_failed")
+                confirmed = base
             confirmed, _ = apply_soft_defaults(confirmed)
             yield {"type": "slots", "slots": confirmed.model_dump()}
         elif revision_kind == "ticket_and_map":
@@ -198,7 +233,7 @@ async def stream_plan(
             yield {"type": "slots", "slots": confirmed.model_dump()}
         else:
             try:
-                extracted = await svc.extract_slots(query, llm)
+                extracted = slots_for_plan(await svc.extract_slots(query, llm))
                 yield {"type": "slots", "slots": extracted.model_dump()}
                 if should_clarify(extracted, slots_from_client=False):
                     yield _clarify_event(extracted)
@@ -254,7 +289,18 @@ async def stream_plan(
             ticket_reason = "reused" if reused_ticket_context.strip() else "skipped"
             map_context = rewrite_plan_ids(str(snapshot.get("map_context") or ""), parent_id or "", plan_id)
             ticket_context = reused_ticket_context
-            map_reason = "ok" if str(snapshot.get("map_context") or "").strip() else "skipped"
+            saved_plan = reusable_itinerary(snapshot)
+            if saved_plan:
+                itinerary = saved_plan
+                facts_status = str(snapshot.get("facts_status") or "unavailable")
+                saved_candidates = snapshot.get("candidates")
+                saved_constraints = snapshot.get("constraints")
+                saved_facts = snapshot.get("facts")
+                saved_search_usage = snapshot.get("search_usage")
+                _copy_map(parent_id or "", plan_id)
+                map_reason = "ok" if (MAPS_DIR / f"{plan_id}.html").is_file() else "skipped"
+            else:
+                map_reason = "ok" if str(snapshot.get("map_context") or "").strip() else "skipped"
             yield {"type": "step", "id": "ticket", "status": "skipped", "reason": "route_no_rail"}
             yield {"type": "step", "id": "map", "status": "skipped", "reason": "route_no_map"}
         else:
@@ -341,13 +387,12 @@ async def stream_plan(
             )
 
             dispatch = DispatchRun()
-            # ponytail: map 必须跑完；超时会 aclose 掉正在写 HTML 的 map_agent
             async for event in iter_dispatch(
                 agen,
                 cancel_event=cancel_event,
                 plan_id=plan_id,
                 run=dispatch,
-                timeout_seconds=None if need_map else dispatch_timeout_seconds(),
+                timeout_seconds=dispatch_timeout_seconds(),
             ):
                 yield event
             cancelled = dispatch.cancelled
@@ -380,30 +425,73 @@ async def stream_plan(
             dest = (confirmed.destination if confirmed is not None else "") or destination_from_query(query)
             stay = (confirmed.lodging if confirmed is not None else None) or lodging_from_query(query)
             day_count = confirmed.days if confirmed is not None and confirmed.days else days_from_query(query)
-            if need_map and not map_file_now.is_file():
-                note = ensure_route_map(
-                    plan_id,
-                    destination=dest or "",
+            travel_date = confirmed.date if confirmed is not None else None
+            must_visit = list(confirmed.must_visit) if confirmed is not None else []
+            avoid = list(confirmed.avoid) if confirmed is not None else []
+            transport_mode = confirmed.transport_mode if confirmed is not None else "public_transit"
+            hints = parse_candidates(map_context) if need_map else []
+            if need_map and (hints or os.getenv("TRAVEL_MAP_FALLBACK") != "0"):
+                built = await assemble_itinerary(
+                    city=dest or "",
                     days=day_count,
+                    date=travel_date,
                     lodging=stay,
-                    need_ticket=need_ticket,
+                    transport_mode=transport_mode,
+                    must_visit=must_visit,
+                    avoid=avoid,
+                    hints=hints,
+                    query_text=query,
+                    cancel_event=cancel_event,
                 )
-                if note:
-                    map_context = note
+                itinerary = built["plan"]
+                facts_status = built["facts_status"]
+                search_error = built["search_error"]
+                route_error = built["route_error"]
+                saved_candidates = built["candidates"]
+                saved_constraints = built["constraints"]
+                saved_facts = built["facts"]
+                saved_search_usage = built["search_usage"]
+                if built["tasks"]:
+                    map_file_now.write_text(render_map_html(built["tasks"]), encoding="utf-8")
+                map_context = built["context"]
+                if not hints:
                     logger.warning("map_fallback plan_id=%s", plan_id)
                     yield {"type": "status", "message": "地图子智能体未写出文件，已用高德检索补写路线地图"}
-            elif need_map and map_file_now.is_file():
-                note = reorder_existing_map(
-                    plan_id,
-                    destination=dest or "",
-                    days=day_count,
-                    lodging=stay,
-                    need_ticket=need_ticket,
-                )
-                if note:
-                    prior = map_context.strip()
-                    map_context = note if not prior else f"{note}\n\n{prior}"
-                    yield {"type": "status", "message": "已重排每日景点顺序"}
+                if built["unlocated"]:
+                    yield {
+                        "type": "warning",
+                        "code": "candidate_unlocated",
+                        "message": "有景点未能在高德定位：" + "、".join(built["unlocated"]),
+                    }
+                if search_error:
+                    yield {
+                        "type": "warning",
+                        "code": "search_unavailable",
+                        "message": "开放规则未核实",
+                    }
+                if route_error:
+                    yield {
+                        "type": "warning",
+                        "code": "route_unverified",
+                        "message": "部分交通耗时未核实",
+                    }
+                if itinerary.get("conflicts"):
+                    yield {
+                        "type": "warning",
+                        "code": "schedule_conflict",
+                        "message": "必去项无法排入行程",
+                    }
+            if dispatch.map_left_open:
+                has_map = map_file_now.is_file()
+                step_event: dict[str, Any] = {
+                    "type": "step",
+                    "id": "map",
+                    "status": "done" if has_map else "skipped",
+                    "elapsed_ms": map_ms,
+                }
+                if not has_map:
+                    step_event["reason"] = "dispatch_timeout"
+                yield step_event
             map_reason = resolve_map_state(
                 need_map=need_map,
                 dispatched=map_dispatched,
@@ -463,6 +551,7 @@ async def stream_plan(
             ticket_context=ticket_context,
             ticket_reason=ticket_reason,
             map_reason=map_reason,
+            plan_ready=itinerary is not None,
             previous_answer=previous_answer or None,
             revision_forbid_old_tickets=revision_kind == "ticket_and_map",
         )
@@ -489,12 +578,16 @@ async def stream_plan(
                     yield event
             if cancelled:
                 return
+            if itinerary is not None:
+                answer = replace_itinerary_section(answer, itinerary_markdown(itinerary))
             issues = summary_gate_issues(answer, ticket_reason)
             if not issues:
                 gate = "retry_pass" if attempt == 2 else "pass"
                 break
         else:
             answer = degraded_plan(ticket_reason, issues)
+            if itinerary is not None:
+                answer = replace_itinerary_section(answer, itinerary_markdown(itinerary))
             gate = "degraded"
             yield {
                 "type": "warning",
@@ -518,6 +611,16 @@ async def stream_plan(
                 "ticket_context": ticket_context,
                 "answer": answer,
                 "usage": current_usage().as_dict(),
+                "schema_version": 2,
+                "itinerary": itinerary,
+                "facts_status": facts_status,
+                "schedule_status": (itinerary or {}).get("schedule_status"),
+                "search_error": search_error,
+                "route_error": route_error,
+                "candidates": saved_candidates,
+                "constraints": saved_constraints,
+                "facts": saved_facts,
+                "search_usage": saved_search_usage,
             }
         )
         map_file = MAPS_DIR / f"{plan_id}.html"

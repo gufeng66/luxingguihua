@@ -59,7 +59,7 @@ MAIN_AGENT_PROMPT_LEGACY = f"""
 """.strip()
 
 NEED_MAP_PATCH = """
-用户未声明不要地图：必须调用 map_agent，且必须把路线地图 HTML 写到 /workspace/results/maps/{plan_id}.html（不是「可以的话再生成」）。地图 HTML 必须内嵌 <script id="amapTaskData" type="application/json"> 数组，由页面 JS 运行时构造 #amapOnline 链接，不要手写 percent-encoding 的完整 URL。
+用户未声明不要地图：必须调用 map_agent。map_agent 只返回候选 JSON，不要写路线 HTML，不要编造坐标或 poi_id。地图由系统根据高德结果生成。
 """
 
 NO_MAP_PATCH = """
@@ -87,12 +87,13 @@ REVISION_MAP_PATCH = """
 """
 
 SLOT_EXTRACT_PROMPT = """你是旅行需求槽位抽取器。今天是 {today}，星期{weekday}。
-从用户输入抽取字段：origin(出发地)、destination(目的地)、date、days、budget、preferences、pace、lodging(住宿地：酒店/民宿/住址，未提及则 null)。
+从用户输入抽取字段：origin(出发地)、destination(目的地)、date、days、budget、preferences、pace、lodging(住宿地：酒店/民宿/住址)、must_visit(明确必去的景点名数组)、avoid(明确不去的景点或活动数组)、transport_mode(public_transit / driving / walking)。
 规则：
-1. 用户未提及的字段填 null，不要猜测填充
-2. date：若是相对日期（明天/下周六等）请换算成 YYYY-MM-DD；已是具体日期则用 YYYY-MM-DD；无法确定则 null
-3. days 必须是正整数或 null
-4. 只输出 json，不要解释
+1. 用户未提及的字段填 null，不要猜测填充。没提必去、不去或交通方式时必须是 null，不能填空数组或 public_transit
+2. 用户明确取消全部必去或不去时，对应字段填 []
+3. date：若是相对日期（明天/下周六等）请换算成 YYYY-MM-DD；已是具体日期则用 YYYY-MM-DD；无法确定则 null
+4. days 必须是正整数或 null
+5. 只输出 json，不要解释
 """
 
 
@@ -120,7 +121,7 @@ def build_main_prompt(
     now = datetime.now()
     if need_map:
         map_patch = NEED_MAP_PATCH.format(plan_id=plan_id)
-        map_rule = "必须调度 map_agent，并生成路线地图 HTML。"
+        map_rule = "必须调度 map_agent 检索候选景点。地图 HTML 由系统生成，不要让模型编造坐标。"
     else:
         map_patch = NO_MAP_PATCH
         map_rule = "用户不要路线地图：禁止调用 map_agent。"

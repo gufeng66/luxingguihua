@@ -33,6 +33,7 @@ class DispatchRun:
     parallel_tasks: bool = False
     parallel_results: bool = False
     dispatch_ms: int = 0
+    map_left_open: bool = False
 
 
 def _subagent_step_id(name: str | None) -> str | None:
@@ -102,6 +103,12 @@ async def iter_dispatch(
 
     for step_id in list(active_steps):
         active_steps.discard(step_id)
+        if run.timed_out and step_id == "map":
+            # 找景点超时后还要补检索，进度条先留着，由 pipeline 收口。
+            run.map_left_open = True
+            if step_id in step_started and run.map_ms is None:
+                run.map_ms = ms_since(step_started[step_id])
+            continue
         extra: dict[str, Any] = {
             "type": "step",
             "id": step_id,

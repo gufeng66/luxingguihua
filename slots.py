@@ -21,7 +21,7 @@ import re
 # 日期计算
 from datetime import date, datetime, timedelta
 # 任意类型标注
-from typing import Any
+from typing import Any, Literal
 
 # Pydantic：自动校验字段类型/范围
 from pydantic import BaseModel, Field, field_validator
@@ -129,6 +129,33 @@ def resolve_relative_date(text: str, today: date | str | None = None) -> str | N
     return None
 
 
+def _as_name_list(v: Any) -> list[str]:
+    if v is None:
+        return []
+    if isinstance(v, str):
+        parts = re.split(r"[,，、]", v)
+    elif isinstance(v, (list, tuple)):
+        parts = list(v)
+    else:
+        parts = [v]
+    names = []
+    for part in parts:
+        text = str(part).strip()
+        if text and text not in names:
+            names.append(text)
+    return names
+
+
+def _coerce_text(v: Any) -> Any:
+    """模型会把「预算 500」抽成数字 500；文本字段遇到数字先转字符串。
+
+    否则 Pydantic 严格模式不认 int→str，整个结构化抽取会解析失败。
+    """
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return str(v)
+    return v
+
+
 class TravelSlots(BaseModel):
     """已经比较干净、可拿去规划的槽位（日期必须是 YYYY-MM-DD）。"""
 
@@ -140,11 +167,20 @@ class TravelSlots(BaseModel):
     preferences: str | None = Field(default=None, max_length=200)
     pace: str | None = Field(default=None, max_length=64)
     lodging: str | None = Field(default=None, max_length=128)
+    must_visit: list[str] = Field(default_factory=list)
+    avoid: list[str] = Field(default_factory=list)
+    transport_mode: Literal["public_transit", "driving", "walking"] = "public_transit"
+
+    @field_validator("must_visit", "avoid", mode="before")
+    @classmethod
+    def _name_list(cls, v: Any) -> Any:
+        return _as_name_list(v)
 
     @field_validator("origin", "destination", "budget", "preferences", "pace", "lodging", mode="before")
     @classmethod
     def _strip_empty(cls, v: Any) -> Any:
-        """空字符串当成 None，避免『填了空白』误判为有值。"""
+        """空字符串当成 None，避免『填了空白』误判为有值；数字先转字符串。"""
+        v = _coerce_text(v)
         if v is None:
             return None
         if isinstance(v, str):
@@ -179,6 +215,22 @@ class ExtractedSlots(BaseModel):
     preferences: str | None = None
     pace: str | None = None
     lodging: str | None = Field(default=None, max_length=128)
+    must_visit: list[str] | None = None
+    avoid: list[str] | None = None
+    transport_mode: Literal["public_transit", "driving", "walking"] | None = None
+
+    @field_validator("must_visit", "avoid", mode="before")
+    @classmethod
+    def _name_list(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        return _as_name_list(v)
+
+    @field_validator("origin", "destination", "budget", "preferences", "pace", "lodging", mode="before")
+    @classmethod
+    def _accept_number(cls, v: Any) -> Any:
+        """毛坯槽位先容忍模型把文本字段写成数字，规范化留给 TravelSlots。"""
+        return _coerce_text(v)
 
 
 def missing_critical(slots: TravelSlots | dict[str, Any] | None) -> list[str]:
@@ -227,22 +279,30 @@ def normalize_extracted(
     extracted: ExtractedSlots | TravelSlots | dict[str, Any],
     *,
     today: date | str | None = None,
-) -> TravelSlots:
-    """把抽取毛坯整理成 TravelSlots：相对日期在这里换算。"""
-    if isinstance(extracted, TravelSlots):
-        data = extracted.model_dump()
-    elif isinstance(extracted, ExtractedSlots):
-        data = extracted.model_dump()
+) -> ExtractedSlots:
+    """只换算已提供的日期。未提供的字段保持未设置，方便和旧槽位合并。"""
+    if isinstance(extracted, BaseModel):
+        data = extracted.model_dump(exclude_unset=True)
     else:
         data = dict(extracted)
 
     raw_date = data.get("date")
-    # 不是标准格式 → 尝试相对日期解析
     if raw_date and not _DATE_RE.match(str(raw_date).strip()):
         data["date"] = resolve_relative_date(str(raw_date), today=today)
     elif raw_date:
         data["date"] = str(raw_date).strip()
 
+    return ExtractedSlots.model_validate(data)
+
+
+def slots_for_plan(extracted: ExtractedSlots | TravelSlots | dict[str, Any]) -> TravelSlots:
+    """合并之后再补默认值。未提供的交通方式这时才变成公共交通。"""
+    if isinstance(extracted, TravelSlots):
+        return extracted
+    if isinstance(extracted, ExtractedSlots):
+        data = extracted.model_dump(exclude_unset=True)
+    else:
+        data = dict(extracted)
     return TravelSlots.model_validate(data)
 
 
@@ -307,7 +367,7 @@ def lodging_route_rules(lodging: str | None, destination: str | None, rail: bool
         "【住宿地闭环路线规则】",
         "1. 先用 amap poi-search 定位住宿地；每天都有一个住宿 POI（同一坐标、day 不同）",
         "2. 每天路线从住宿地出发，最后一个景点之后回到住宿地",
-        "3. 每个完整游玩日安排 3 到 4 个景点。少折腾指少换乘、顺路，不是少排景点",
+        "3. 只提交候选景点，不要自己排死每天去几个",
     ]
     if rail:
         lines += [
@@ -328,6 +388,10 @@ def format_slots_for_prompt(slots: TravelSlots, *, rail: bool = False) -> str:
         f"- 预算：{slots.budget}",
         f"- 偏好：{slots.preferences}",
         f"- 出行节奏：{slots.pace}",
+        f"- 必去：{'、'.join(slots.must_visit) if slots.must_visit else '无'}",
+        f"- 不去：{'、'.join(slots.avoid) if slots.avoid else '无'}",
+        f"- 市内交通：{slots.transport_mode}",
+        "- 每日默认 09:00–18:00。原话里的具体时刻不会自动当成已核实预约",
     ]
     rules = lodging_route_rules(slots.lodging, slots.destination, rail)
     if rules:

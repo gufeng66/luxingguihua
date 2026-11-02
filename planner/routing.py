@@ -206,9 +206,10 @@ def classify_revision(
 
 
 def merge_slots(base: TravelSlots, overlay: TravelSlots) -> TravelSlots:
-    """修订时：用新抽取覆盖旧槽位；overlay 里的空值不覆盖。"""
+    """只覆盖本轮明确给出的字段。null 不覆盖；空列表表示明确清空。"""
     data = base.model_dump()
-    for key, val in overlay.model_dump().items():
+    provided = overlay.model_dump(exclude_unset=True)
+    for key, val in provided.items():
         if val is None:
             continue
         if isinstance(val, str) and not val.strip():
