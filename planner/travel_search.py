@@ -9,13 +9,25 @@ from urllib.parse import urlparse
 
 import httpx
 
+from pathlib import Path
+
+from planner.run_stats import note as note_stat
+from planner.urls import safe_evidence_url
+
 # 公开场馆站。摘要仍须逐条通过子串、场馆身份和语义门槛。
-ALLOWED_HOSTS = frozenset(
-    {
-        "www.dpm.org.cn",
-        "www.chnmuseum.cn",
-    }
-)
+def _load_hosts() -> frozenset[str]:
+    path = Path(__file__).with_name("sources.json")
+    try:
+        import json
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        hosts = data.get("hosts") or []
+    except (OSError, ValueError):
+        hosts = []
+    return frozenset(str(host).lower() for host in hosts)
+
+
+ALLOWED_HOSTS = _load_hosts()
 
 _SENTENCE = re.compile(r"[^。！？\n]+[。！？]?")
 _RELATIVE = ("本周", "下周", "明天", "明日", "今天", "后天")
@@ -150,7 +162,12 @@ def parse_evidence(summary: str, *, url: str, poi_name: str, poi_id: str, allowe
     """子串、主机名、场馆名和完整语义都过关才是 hard，否则 pending。"""
     hosts = ALLOWED_HOSTS if allowed_hosts is None else allowed_hosts
     summary = summary or ""
-    hard_host = _host(url) in hosts
+    # 来源链接既会拼进给模型的提示词，也会带着 poi_id 显示到前端，所以必须是
+    # 能通过白名单校验的公网 http(s) 地址。不合格的链接一律不落地：source_url
+    # 置空、原文另存 source_url_raw 供排查，并把整条事实降级为 pending。
+    # 这样即便上游检索被投毒，也不会把 javascript:/内网地址传出去。
+    safe_url = safe_evidence_url(url, hosts)
+    hard_host = safe_url is not None and _host(safe_url) in hosts
     found: list[dict] = []
 
     def add(kind: str, value, sentence: str, *, weekdays: list[int] | None = None, force_pending: bool = False) -> None:
@@ -172,8 +189,12 @@ def parse_evidence(summary: str, *, url: str, poi_name: str, poi_id: str, allowe
             "value": value,
             "quote": sentence,
             "status": status,
-            "source_url": url,
+            "source_url": safe_url or "",
         }
+        if safe_url is None:
+            # 原始链接留档只为排查，不参与展示、不进提示词
+            fact["source_url_raw"] = str(url or "")[:2048]
+            fact["status"] = "pending"
         if scope:
             fact["applies_on"] = scope
         if weekdays:
@@ -249,11 +270,14 @@ async def gather_facts(
     client: httpx.AsyncClient | None = None,
     allowed_hosts: frozenset[str] | None = None,
     cancel_event: asyncio.Event | None = None,
+    window: float = 30.0,
+    on_attempt=None,
 ) -> dict:
     """固定模板查询。无 Key、401、额度不足直接降级，不重试。"""
     clock = clock or (lambda: asyncio.get_running_loop().time())
-    budget = SearchBudget(clock=clock)
+    budget = SearchBudget(clock=clock, window=window)
     if not (api_key or "").strip():
+        note_stat("evidence_search", "dependency_missing")
         return {"facts": [], "facts_status": "unavailable", "attempts": 0, "error": "no_key", "usage": None}
     own_client = client is None and post is None
     if own_client:
@@ -266,6 +290,9 @@ async def gather_facts(
     fatal = False
 
     async def once(query: str, timeout: float) -> dict:
+        if on_attempt is not None and not on_attempt():
+            budget.closed = True
+            return {"results": []}
         if post is not None:
             return await post(query, timeout)
         assert client is not None
@@ -376,6 +403,18 @@ async def gather_facts(
             await asyncio.gather(*tasks, return_exceptions=True)
         if own_client and client is not None:
             await client.aclose()
+    # 取证阶段是唯一知道「为什么没查成」的一层：401/403/额度不足是 fatal，
+    # 单个 POI 的请求异常只是 error，超时由 stage_timeout 提前收口。
+    if fatal:
+        note_stat("evidence_search", "blocked_by_budget")
+    elif stage_timeout <= 0:
+        note_stat("evidence_search", "timed_out")
+    elif error:
+        note_stat("evidence_search", "failed")
+    elif saved:
+        note_stat("evidence_search", "succeeded")
+    else:
+        note_stat("evidence_search", "not_needed")
     saved = _downgrade_conflicts(saved)
     wanted = {str(poi.get("poi_id") or poi.get("name") or "") for poi in candidates}
     wanted.discard("")

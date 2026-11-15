@@ -50,10 +50,17 @@ async def watch_aiter(
     cancel_event: asyncio.Event | None = None,
     on_idle: Callable[[], Awaitable[None]] | None = None,
     timeout_seconds: float | None = None,
+    heartbeat_seconds: float | None = None,
 ) -> AsyncIterator[Any]:
-    """带取消与可选总超时的异步迭代；超时 raise TimeoutError 并 aclose 生成器。"""
+    """带取消与可选总超时的异步迭代。空闲心跳不重置断连检查。
+
+    `timeout_seconds` 是整条流的总时限（不是单次等待）：超时会先关闭上游生成器
+    （取消挂起的 `__anext__` 并 `aclose`），再抛 `asyncio.TimeoutError`，调用方据此
+    决定是否补发一条终止事件；`cancel_event` 触发时同样先关闭再正常返回。
+    """
     loop = asyncio.get_running_loop()
     started = loop.time()
+    last_beat = started
     nxt = asyncio.create_task(agen.__anext__())
     closed = False
 
@@ -94,6 +101,9 @@ async def watch_aiter(
                     raise asyncio.TimeoutError()
                 if on_idle is not None:
                     await on_idle()
+                if heartbeat_seconds and (loop.time() - last_beat) >= heartbeat_seconds:
+                    last_beat = loop.time()
+                    yield {"type": "_heartbeat"}
                 continue
             try:
                 item = nxt.result()

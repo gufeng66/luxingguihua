@@ -10,12 +10,11 @@
 
 ## 决策
 
-`create_deep_agent` 的 `subagents` 按路由挂载，不按“多写一段人设”挂载。
+地图和票务由代码按槽位启动，不走 `create_deep_agent`。那个入口会附带文件系统、shell 和通用子智能体，白名单守不住。
 
-- `map_agent` 只有只读的 `amap-lbs-skill` 和该目录下的 shell，负责景点、路线、地图 HTML。
-- `ticket_agent` 只有 12306 MCP 返回的工具，负责车次和票价。MCP 不可用时不挂载。
-- 主智能体只按已确认槽位发 task，不写最终长文。
-- 成文是编排层一次无工具调用 `stream_summary`（见 ADR-1），落盘前过闸门。
+- 地图只有 `amap_poi_search`。坐标复核、路线、排程和地图 HTML 在编排层。
+- 票务只挂 MCP 发现结果里查询需要的工具，名字在 `planner/ticket_facts.py` 的 `TICKET_QUERY_TOOLS`。连接按请求创建和关闭，不在进程内共享。
+- 成文是编排层一次无工具调用 `stream_summary`（见 ADR-1）。车票、预算和行程表由结构化数据替换，落盘前过闸门。
 
 要不要查票、要不要出地图仍由规则决定（见 ADR-2），不交给主模型。
 

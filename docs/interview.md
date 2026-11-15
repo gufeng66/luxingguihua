@@ -1,39 +1,57 @@
 # 面试叙述
 
-数字来自 2026-10-07 的黄金集（n=3）、`evals/judge_results.json`、`evals/cache_probe.py`，以及 `test_fabricated_train_is_retried_then_dropped`。单价是 DeepSeek Flash 官方面价 off-peak cache-miss（$0.15 / $0.60 每百万 token）。
+**当前口径：下方历史数字来自旧流水线，不能作为当前延迟、成本、并行收益或效果成绩。** 当前可引用的是源码与离线回归验证的控制层行为；最新在线绩效需要重新跑真实服务。这里记录项目实现，个人贡献需按实际参与情况另行说明。
 
 ## 简历句
 
-- 用规则路由、六章节闸门和票务五态降级，把 mock 成文里的编造车次 `G1234` 挡在落盘之外（确定性单测，`summary_gate=degraded`）。真跑 18 次成文闸门均为 pass；同源 judge 18 份里 15 份 ≥4 分，低分来自工具原文为空时模型仍写细节。
-- 跨城规划中位 21.3 分钟、约 67 万 prompt token / $0.12（三次 $0.057–$0.218）。车票 MCP 冷握手约 8.5 秒，同进程 5 分钟内第二次握手为 0。
-- map 与 ticket 分工具面挂载：地图只有只读高德 Skill 和 shell，车票只有 MCP，成文是无工具调用。shell 能跑 `node`，不是容器。
+- 用规则路由和工具原始响应约束成文，离线注入的未授权车次 `G1234` 在落盘前被结构化替换移除（`evals/test_quality.py`、`evals/test_gate.py`）；不据此声称模型没有幻觉。
+- 地图只有 `amap_poi_search`，票务只挂查询所需的 MCP 工具，连接按请求创建。成文是无工具调用，车票、预算和行程表由结构化数据生成。
 
 ## 1. 闸门丢掉编造车次
 
 - 情境：无票时模型仍会写出 `G1234`。
-- 动作：成文后、落盘前检查六章节；票务不是可靠态时丢掉车次号，失败重试一次，仍失败则降级。锚点 `evals/test_gate.py`。
-- 结果：该测试里 `final.content` 不含 `G1234`，`summary_gate=degraded`。这是护栏测试，没有「关掉闸门」的对照输出。真跑 18 次闸门都是 pass，挡不住的是另一种情况：MCP 不可用或自驾时工具原文很空，模型仍写里程和票价区间，judge 给了 2 分和 3 分。
+- 动作：从受支持的工具原始响应格式提取车次事实，检查日期与区间，保留来源和查询时间。模型总结里多出来的车次号在替换章节后移除。章节仍不完整才重试一次。锚点 `evals/test_quality.py::test_g1234_in_summary_is_removed_when_raw_lacks_it`。
+- 结果：原文没有 `G1234` 时，最终正文不含它。这不是「模型被说服了」，是结构化替换。
 
-## 2. 路由用规则
+## 2. 修订有明确优先级，合并后重新澄清
 
-- 情境：要不要连 12306、要不要跑地图，会花钱，也会打外部服务。交给模型就无法离线锁定同一句话走同一条路。
-- 动作：`planner/routing.py` 用槽位和关键词决定跳过原因。见 ADR-2。
-- 结果：离线测试能断言查票和出图。代价是新说法要加关键词。黄金集里「周末去郑州玩」3 次都没有停在确认卡，说明缺槽位的拦截也不该只靠模型自觉。
+- 情境：旧原话说“坐高铁”，本轮改自驾，拼接两轮文本会让历史铁路关键词覆盖新意图；一日游改两日后也可能新缺住宿地。
+- 动作：`planner/routing.py` 按当前明确意图、合并交通槽位、历史原话的顺序判断。所有修订合并槽位后统一检查缺失项；澄清后带确认槽位和父方案继续请求。
+- 结果：离线回归断言改自驾不连接票务；改两日先返回 `clarify`，补住宿后继续，且不重复抽取覆盖确认值。证据为 `evals/test_revision_timeout.py::test_rail_to_driving_revision_does_not_connect_ticket` 与 `test_longer_revision_clarifies_then_accepts_confirmed_slots`。关键词路由仍有表达覆盖范围的限制。
 
-## 3. shell 能跑脚本，但不是沙箱
+## 3. 地图不再拿 shell
 
-- 情境：`StateBackend` 没有 `execute`，地图子智能体跑不了 `node`，调度会一直拖到超时。换成宿主机 shell 之后，中文 Windows 上 `text=True` 再叠 UTF-8 locale，cmd 的 GBK 会让读线程崩掉。
-- 动作：工作目录固定在 skill 目录，`inherit_env=False`，只放行 node 启动变量和 `AMAP_KEY`。见 `planner/backends.py` 和 ADR-3。
-- 结果：密钥不再从环境继承。磁盘上的 `.env` 和任意出网仍然没挡住，ADR 里这两条仍是未缓解。
+- 情境：`create_deep_agent` 会附带文件系统和 shell，白名单挡不住。
+- 动作：当前主路径不调用 `create_deep_agent`。`iter_agents` 根据规则用 `asyncio` 启动子任务，各自执行 `bounded_loop`。地图只挂 `amap_poi_search`，票务只挂查询工具，路线和 HTML 在编排层。见 ADR-4。
+- 结果：当前流水线不把文件系统或宿主机 shell 交给模型。这是应用工具面隔离，不是操作系统级沙箱。ADR-3 保留作旧实现的风险记录。
 
-## 4. 并行要看开始时间，不看一个布尔值
+## 4. 并行是否有效要用当前版本对照
 
-- 情境：提示词要求同一条消息里同时调度 map 和 ticket。`parallel_dispatch` 还要求同一次工具消息里两边结果都到。ticket 大约 45 秒结束，map 要十几分钟，结果必然分两次回来，这个布尔值几乎恒为 false。
-- 动作：用 `map_ticket_active_delta_ms` 看是否同 turn 发出，用 `dispatch_ms` 对比 `map_ms + ticket_ms`。`FORCE_SERIAL=1` 只改提示词。对照在 `evals/serial.json`（每种模式 5 次）。
-- 结果：parallel 模式 4/5 次 delta 为 0，1 次相差约 18 分钟。serial 模式 5/5 次都拉开了，最小约 6 分钟，中位约 12 分钟。墙钟没有省 30%：parallel 的 `dispatch_ms` 中位约 1361 秒，只有 1 次低于 `map_ms + ticket_ms`，而且只少约 11 秒。serial 的 `dispatch_ms` 中位约 1432 秒，和 parallel 的差距小于单次波动。
+- 动作：代码维护子任务列表，正常并发启动；`FORCE_SERIAL=1` 时先票务后地图。记录两侧实际开始时间与耗时，不靠提示词或单个布尔字段证明并行。
+- 边界：当前缺少新版本在线对照，不能从并发启动直接推出延迟下降百分比。旧对照保留在下方历史记录。
 
-## 5. 成文不是智能体
+## 5. 成文等待必须能超时，而不只是检查已返回的片段
 
-- 情境：再包一层带工具的 summary，会在成文阶段继续查票、改文件，闸门也说不清。
-- 动作：`stream_summary` 是编排层一次无工具调用。map 只有 skill 和 shell，ticket 只有 MCP 工具。见 ADR-1、ADR-4。
-- 结果：跨城中位约 67 万 prompt token、2.9 万 completion token、约 $0.12。修订有一次冲到约 468 万 prompt token、$0.73，说明成本主要在地图子智能体的多轮工具，不在最后那次成文。
+- 情境：仅在收到 chunk 后检查截止时间，模型卡住不返回时预算就失效。
+- 动作：`stream_summary` 无工具，使用绝对截止时间限制每次 `anext` 等待；超时关闭流，编排层用确定性说明和已有结构化数据收尾。
+- 结果：回归分别模拟首段不返回、先返回一段再卡住；断言及时超时、关闭流，最终 `summary_gate=degraded`，草稿中的 `G1234` 不留在最终正文，且不重启模型成文。证据为 `evals/test_revision_timeout.py::test_summary_deadline_interrupts_wait_and_closes_stream` 与 `test_summary_timeout_finishes_with_structured_fallback`。这不代表所有模型输出都经过事实核实。
+
+## 6. 评测不能把失败样本丢掉
+
+- 情境：只统计有耗时的完成项，会隐藏请求失败、无终态、子进程崩溃或超时；只写 `expect` 而不执行，也无法证明正确路由。
+- 动作：黄金集记录每轮终态，保留 `error` / `timeout` / `no_terminal`；分澄清轮和完整轮执行 `expect`，检查路由、票务状态与地图产物，失败批次返回非零退出码。
+- 结果：`evals/test_golden_runner.py` 覆盖缺行、崩溃、超时、两轮期望和失败计数。耗时桶仍只对有耗时的样本统计，需与全样本终态和期望通过率一起看。`quality=partial` 与执行失败分别记录，不能混为一个成功率。
+
+## 7. 离线回放不能污染下一次真实规划
+
+- 情境：直接替换模块函数、环境和输出目录，回放结束后真实请求还可能调用假模型或写入临时目录。
+- 动作：使用标准库局部补丁和 `ExitStack`，成功或异常都恢复原状态；默认临时目录自动清理，要查看地图时显式传入 `output_dir`；回放期间关闭追踪外联。
+- 结果：`evals/test_replay_isolation.py` 验证函数和路径恢复、环境恢复、异常清理，以及调用方保留产物。回放要求顺序运行，不与真实请求共享进程并发执行。
+
+## 历史记录：不作为当前成绩
+
+以下保留旧材料，便于解释迭代依据。来源为 2026-10-07 黄金集（n=3）、`evals/judge_results.json`、`evals/cache_probe.py` 及 `evals/serial.json`。历史成本采用当时记录的 DeepSeek Flash off-peak cache-miss 单价（$0.15 / $0.60 每百万 token），不是当前报价。
+
+- 旧黄金集里「周末去郑州玩」3 次都未停在确认卡；该跑批早于后来加入的澄清机制，不能据此描述当前行为。
+- 旧调度器靠提示词要求同一消息并发，旧 `parallel_dispatch` 还依赖结果同消息返回。ticket 约45秒结束、map十几分钟，导致旧布尔值几乎恒为 false。历史 parallel 模式4/5次开始 delta 为0，1次约18分钟；serial模式5/5次拉开，最小约6分钟、中位约12分钟。`dispatch_ms` 中位分别约1361和1432秒，差异小于单次波动；parallel仅1次低于 `map_ms + ticket_ms`，只少约11秒。没有证明“墙钟省30%”，也不能用于当前代码的收益对比。
+- 历史跨城中位约67万 prompt token、2.9万 completion token、约$0.12；修订有一次约468万 prompt token、$0.73。这些是旧流水线成本，不能当作当前有界循环的成本或归因结论。

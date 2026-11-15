@@ -13,13 +13,21 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from evals.checkers import find_train_numbers, has_required_sections  # noqa: E402
-from planner.summary import degraded_plan, summary_gate_issues  # noqa: E402
+from planner.summary import (  # noqa: E402
+    cautions_markdown,
+    degraded_plan,
+    demand_summary_markdown,
+    section_body,
+    state_consistency_issues,
+    summary_gate_issues,
+)
+from planner.pipeline import _apply_structured  # noqa: E402
 from slots import TravelSlots  # noqa: E402
 
 _SECTIONS = """## 需求摘要
 新乡到郑州一日游
 ## 景点建议
-二七塔
+二七塔（检索结果待确认）
 ## 车票建议
 {ticket}
 ## 预算
@@ -60,7 +68,11 @@ def test_shell_env_hides_llm_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LANGSMITH_API_KEY", "ls-secret")
     monkeypatch.setenv("AMAP_WEBSERVICE_KEY", "amap-test")
     monkeypatch.delenv("AMAP_KEY", raising=False)
+    import planner.backends as backends_mod
     from planner.backends import backend, shell_env
+
+    if not backends_mod.BACKENDS_AVAILABLE:
+        pytest.skip("deepagents 未安装：历史模块的文件系统后端不可用")
 
     env = shell_env()
     assert env["AMAP_KEY"] == "amap-test"
@@ -110,17 +122,58 @@ def test_rate_limit_and_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     server._reject_bad_api_key(None)
 
 
+def test_bad_explicit_api_key_is_not_masked_by_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
+    import server
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    monkeypatch.setenv("PLAN_API_KEY", "secret")
+    token = "valid-cookie"
+    server._sessions[server._key_hash(token)] = (float("inf"), server._key_hash("secret"))
+    request = Request({
+        "type": "http",
+        "headers": [(b"x-api-key", b"wrong"), (b"cookie", f"{server._SESSION_COOKIE}={token}".encode())],
+    })
+    with pytest.raises(HTTPException, match="X-API-Key") as exc:
+        server._authenticated(request)
+    assert exc.value.status_code == 401
+
+
 @pytest.mark.asyncio
-async def test_health_uses_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_health_is_liveness_only(monkeypatch: pytest.MonkeyPatch) -> None:
     import server
 
-    monkeypatch.setattr(server, "_probe_mcp", lambda _url: False)
-    monkeypatch.setattr(server.shutil, "which", lambda _name: r"C:\node.exe")
+    def boom(_url: str) -> bool:
+        raise AssertionError("存活检查不应探测外部服务")
+
+    monkeypatch.setattr(server, "_probe_mcp", boom)
     body = await server.health()
     assert body["status"] == "ok"
-    assert body["node"] is True
-    assert body["skill"] is True
-    assert body["mcp_reachable"] is False
+    assert body["check"] == "live"
+
+
+@pytest.mark.asyncio
+async def test_ready_splits_config_and_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
+    import server
+
+    monkeypatch.setenv("OPENAI_API_KEY", "present")
+    monkeypatch.setenv("AMAP_WEBSERVICE_KEY", "present")
+    # 受控假探测：绝不访问真实 MCP/网络，且可达分支也用假值覆盖
+    monkeypatch.setattr(server, "_probe_mcp", lambda _url: False)
+    body = await server.ready()
+    assert body["ready"] is True
+    assert body["degraded"] is True
+    assert body["mcp_http"] == "unreachable"
+    assert body["mcp_tools"] == "not_checked"
+    monkeypatch.setattr(server, "_probe_mcp", lambda _url: True)
+    reachable = await server.ready()
+    assert reachable["mcp_http"] == "reachable"
+    assert reachable["degraded"] is False
+    monkeypatch.setattr(server, "_probe_mcp", lambda _url: False)
+    monkeypatch.delenv("OPENAI_API_KEY")
+    missing = await server.ready()
+    assert missing["ready"] is False
+    assert "OPENAI_API_KEY" in missing["missing"]
 
 
 def _slots() -> TravelSlots:
@@ -195,14 +248,12 @@ def _tool(content: str, tool_call_id: str):
 async def test_fabricated_train_is_retried_then_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
     events, calls = await _run_plan(monkeypatch, _fake_train_text(), mount_ticket=False, dispatch_map=True)
     final = next(e for e in events if e.get("type") == "final")
-    assert len(calls) == 2
-    assert calls[0] is None
-    assert calls[1]
+    assert calls == [None]
     assert "G1234" not in final["content"]
     assert has_required_sections(final["content"])
-    assert final["timings"]["summary_gate"] == "degraded"
+    assert final["timings"]["summary_gate"] == "pass"
     assert "prompt_tokens" in final["timings"]
-    assert any(e.get("code") == "summary_degraded" for e in events)
+    assert not any(e.get("code") == "summary_degraded" for e in events)
     assert any(e.get("reason") == "mcp_unavailable" for e in events if e.get("id") == "ticket")
 
 
@@ -212,17 +263,131 @@ async def test_valid_summary_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> 
     final = next(e for e in events if e.get("type") == "final")
     assert calls == [None]
     assert final["timings"]["summary_gate"] == "pass"
-    assert "未查票" in final["content"]
+    assert "没有可解析的车次事实" in final["content"]
     assert not any(e.get("code") == "summary_degraded" for e in events)
 
 
 @pytest.mark.asyncio
 async def test_skill_not_dispatched_warns_and_blocks_trains(monkeypatch: pytest.MonkeyPatch) -> None:
     events, _calls = await _run_plan(monkeypatch, _fake_train_text(), mount_ticket=False, dispatch_map=False)
-    assert any(e.get("code") == "map_not_dispatched" for e in events)
+    assert any(e.get("code") == "map_no_html" for e in events)
     final = next(e for e in events if e.get("type") == "final")
     assert find_train_numbers(final["content"]) == []
     assert "map_url" not in final
+
+
+def test_rail_state_distinguishes_reuse_from_no_rail() -> None:
+    """「本轮不重查（沿用旧票）」不能被写成「本次不需要铁路」。
+
+    用户实测反例：ticket_reason=reused、仍用 G3252 时，需求摘要写
+    「铁路：本次不需要（未查票）」；自驾一日游的注意事项却出现「返程尚未选定」。
+    这两句都会让人以为行程里没有铁路段 / 有没定的返程。
+    """
+    base = dict(
+        origin="新乡",
+        destination="郑州",
+        date_text="2026-11-07",
+        days=1,
+        party=2,
+        lodging_state={"scope": "area", "precision": "area", "text": "郑州站附近", "poi_id": None},
+    )
+    # 需要铁路 + 沿用上次查询结果。
+    reused = demand_summary_markdown(
+        **base,
+        need_ticket=False,
+        rail_state={"required": True, "outbound": True, "inbound": False, "queried": False, "reused": True},
+    )
+    assert "沿用上次查询结果" in reused
+    assert "本次不需要" not in reused
+    # 需要铁路 + 本轮真的查了。
+    queried = demand_summary_markdown(
+        **base,
+        need_ticket=True,
+        rail_state={"required": True, "outbound": True, "inbound": False, "queried": True, "reused": False},
+    )
+    assert "本次需要查票" in queried
+    assert "沿用" not in queried
+    # 自驾：既不需要铁路，也不该出现「返程尚未选定」。
+    drive = demand_summary_markdown(
+        **base,
+        need_ticket=False,
+        rail_state={"required": False, "outbound": False, "inbound": False, "queried": False, "reused": False},
+    )
+    assert "本次无需铁路" in drive
+    cautions = cautions_markdown(
+        "### 建议\n早点出发",
+        plan_basis={"outbound": None, "inbound": None},
+        rail_window={"outbound": {"state": "unknown"}, "inbound": {"state": "not_constrained"}},
+        lodging_state={"scope": "area", "text": "郑州站附近"},
+        rail_state={"required": False, "outbound": False, "inbound": False, "queried": False, "reused": False},
+    )
+    assert "返程尚未选定" not in cautions
+    # 不传 rail_state 时退回旧两态口径，既有调用方与单测不被破坏。
+    legacy = demand_summary_markdown(**base, need_ticket=False)
+    assert "本次不需要（未查票）" in legacy
+
+
+def test_state_consistency_flags_one_person_budget() -> None:
+    """人数已确认 2 人时，「按 1 人估算」是自相矛盾，必须被拦下。"""
+    text = _ok_text().replace("500", "5000 元（按 1 人估算）")
+    issues = state_consistency_issues(text, {"party": 2})
+    assert issues and any("按 1 人" in item for item in issues)
+    # 人均口径是正常说法，不能误伤。
+    fine = _ok_text().replace("500", "每人 5000 元，人均 500 元")
+    assert state_consistency_issues(fine, {"party": 2}) == []
+
+
+def test_structured_demand_section_replaces_model_text() -> None:
+    """需求摘要整节换成结构化内容，只出现一次，且不残留模型的按 1 人估算。"""
+    text = _ok_text().replace("新乡到郑州一日游", "新乡到郑州一日游（预算按 1 人估算）")
+    out = _apply_structured(
+        text,
+        itinerary=None,
+        ticket_facts=[],
+        ticket_reason="skipped",
+        ticket_reused=False,
+        queried_at="",
+        confirmed=_slots(),
+        need_ticket=False,
+        query="这周六从新乡坐高铁去郑州一日游",
+        request_ctx={"party_size": 2},
+        party=2,
+    )
+    assert out.count("## 需求摘要") == 1
+    assert "按 1 人估算" not in section_body(out, "需求摘要")
+    assert "人数：2 人" in section_body(out, "需求摘要")
+    assert state_consistency_issues(out, {"party": 2}) == []
+
+
+def test_return_candidate_is_not_written_as_locked() -> None:
+    """返程没选定、只有候选时，正文只能写候选，不能写「尽早锁定」。"""
+    body = "### 建议\n尽早锁定 G3252 返程"
+    out = cautions_markdown(
+        body,
+        plan_basis={"outbound": {"train_no": "G1813"}, "inbound": None},
+        rail_window={"outbound": {"state": "known"}, "inbound": {"state": "unknown"}},
+        lodging_state={"scope": "area", "precision": "area", "poi_id": None, "text": "郑州站附近"},
+        return_pending=[{"train_no": "G3252"}],
+    )
+    assert "候选：G3252" in out
+    assert "尽早锁定" not in out
+    assert "未选定" in out
+    # 校验侧同样不能放过这类写法。
+    assert state_consistency_issues("## 注意事项\n尽早锁定 G3252 返程", {"plan_basis": {"inbound": None}})
+
+
+@pytest.mark.asyncio
+async def test_degraded_path_keeps_six_sections_with_new_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """新增的结构化参数不能让降级路径报错，六章节与车次号约束都要保住。"""
+    # 成文阶段没有任何时间：走 degraded_plan 那条确定性收尾路径。
+    monkeypatch.setenv("PLAN_SUMMARY_SECONDS", "0")
+    events, _calls = await _run_plan(monkeypatch, _ok_text(), mount_ticket=False, dispatch_map=True)
+    final = next(e for e in events if e.get("type") == "final")
+    assert has_required_sections(final["content"])
+    assert final["timings"]["summary_gate"] == "degraded"
+    assert find_train_numbers(final["content"]) == []
+    assert "人数" in section_body(final["content"], "需求摘要")
+    assert state_consistency_issues(final["content"], {"party": 2}) == []
 
 
 def test_langsmith_explicit_false_sticks(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -255,8 +420,11 @@ def test_windows_shell_text_decodes_console_output() -> None:
 
 
 def test_skill_route_rejects_writes() -> None:
+    import planner.backends as backends_mod
     from planner.backends import backend
 
+    if not backends_mod.BACKENDS_AVAILABLE:
+        pytest.skip("deepagents 未安装：历史模块的文件系统后端不可用")
     skill = backend.routes["/workspace/skills/amap-lbs-skill/"]
     assert skill.write("/workspace/skills/amap-lbs-skill/SKILL.md", "hack").error
     assert skill.edit("/workspace/skills/amap-lbs-skill/SKILL.md", "a", "b").error
@@ -309,8 +477,8 @@ def test_plans_roundtrip_strips_tokens(tmp_path: Path, monkeypatch: pytest.Monke
     row = list_plans(5)[0]
     assert row["plan_id"].startswith("11111111")
     assert row["timings"]["total_ms"] == 12
-    assert "prompt_tokens" not in row["timings"]
-    assert "cost_usd" not in row["timings"]
+    assert row["timings"]["prompt_tokens"] == 9
+    assert row["usage"] is None or row["outcome"] in {None, "finished"}
 
 
 def test_plans_db_failure_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -341,19 +509,42 @@ def test_api_plans_registered_before_frontend() -> None:
     assert paths.index("/api/plans") < len(paths) - 1
 
 
-def test_force_serial_changes_rail_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FORCE_SERIAL", "1")
-    from planner.prompts import build_main_prompt
+@pytest.mark.asyncio
+async def test_force_serial_runs_ticket_before_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    import planner.subruns as subruns
 
-    built = build_main_prompt(
-        ticket_available=True,
-        plan_id="p1",
-        need_ticket=True,
-        need_map=True,
-        slots=TravelSlots(origin="新乡", destination="郑州", date="2026-10-10", days=1),
-    )
-    assert "等它返回后再调度" in built
-    assert "同一轮" not in built
+    monkeypatch.setenv("FORCE_SERIAL", "1")
+    order: list[str] = []
+
+    async def ticket(**_kwargs):
+        order.append("ticket")
+        return {"started": True, "summary": "", "timed_out": False, "tools": []}
+
+    async def amap(**_kwargs):
+        order.append("map")
+        return {"text": "", "started": True, "timed_out": False, "tools": ["amap_poi_search"]}
+
+    monkeypatch.setattr(subruns, "run_ticket_agent", ticket)
+    monkeypatch.setattr(subruns, "run_map_agent", amap)
+    from planner.budget import RunBudget
+
+    out: dict = {}
+    events = [
+        event
+        async for event in subruns.iter_agents(
+            out,
+            need_map=True,
+            need_ticket=True,
+            ticket_tools=[],
+            llm=MagicMock(),
+            query="去郑州",
+            budget=RunBudget(),
+            cancel_event=None,
+            city="郑州",
+        )
+    ]
+    assert order == ["ticket", "map"]
+    assert any(event.get("type") == "subagent" for event in events)
 
 
 def test_parse_judge_payload() -> None:

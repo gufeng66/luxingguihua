@@ -303,6 +303,9 @@ def slots_for_plan(extracted: ExtractedSlots | TravelSlots | dict[str, Any]) -> 
         data = extracted.model_dump(exclude_unset=True)
     else:
         data = dict(extracted)
+    # 模型把 transport_mode 抽成 null 时不能当成「显式设为空」：
+    # 没值就走字段默认，否则 literals 校验会直接失败。
+    data = {key: value for key, value in data.items() if value is not None}
     return TravelSlots.model_validate(data)
 
 
@@ -397,6 +400,137 @@ def format_slots_for_prompt(slots: TravelSlots, *, rail: bool = False) -> str:
     if rules:
         lines.append(rules)
     return "\n".join(lines)
+
+
+# 住宿文本里表示「只给到区域」的词。命中只说明「可能是区域」，是否真的需要确认由
+# lodging_needs_confirm 再判一次（「上海站附近的某某酒店」含「附近」但已经够具体）。
+AREA_HINT = re.compile(r"附近|周边|一带|区域|市中心")
+# 被认为是「具体住宿」的词：出现任意一个，就不再只是区域描述。
+_LODGING_WORDS = ("酒店", "宾馆", "民宿", "公寓", "旅馆", "客栈", "招待所", "青旅")
+# 门牌号也能把区域描述变成具体地点。
+_STREET_NO = re.compile(r"\d+\s*号")
+
+# 留待用户确认（而不是直接给默认值）的字段名。
+PENDING_FIELDS = ("lodging", "party_size", "budget_scope")
+
+
+def lodging_needs_confirm(lodging: str | None) -> bool:
+    """住宿只给到区域、没给具体酒店名时要用户确认。
+
+    `AREA_HINT` 只做「发现」：去掉区域词后仍然有住宿词或门牌号，就当成具体住宿，
+    不能再拦着用户填一遍。
+    """
+    text = (lodging or "").strip()
+    if not text:
+        return False
+    if not AREA_HINT.search(text):
+        return False
+    core = AREA_HINT.sub("", text).strip()
+    if not core:
+        return True
+    if any(word in core for word in _LODGING_WORDS):
+        return False
+    if _STREET_NO.search(core):
+        return False
+    return True
+
+
+def input_state(
+    slots: TravelSlots | None,
+    *,
+    lodging_scope: str | None = None,
+    lodging_kind: str | None = None,
+    party_known: bool = False,
+    budget_scope: str | None = None,
+) -> dict[str, Any]:
+    """把「这次输入还缺什么」拆成结构化的状态，供暂停/草稿/确认三处共用。
+
+    只描述输入，不判断能不能出方案；是否暂停由 must_pause 决定。
+    """
+    missing = list(missing_critical(slots))
+    days = (slots.days if slots is not None else None) or 1
+    lodging = (slots.lodging if slots is not None else None) or ""
+    missing_lodging = bool(days > 1 and not lodging.strip())
+    # 用户已经明确选了「按区域规划」，且住宿文本没变 → 不再拦。
+    area_approved = lodging_scope == "area"
+    pending = bool(lodging.strip()) and not area_approved and (
+        lodging_needs_confirm(lodging) or lodging_kind in {"area", "unresolved"}
+    )
+    return {
+        "missing_critical": missing,
+        "missing_lodging": missing_lodging,
+        "lodging_pending": pending,
+        "lodging_scope": lodging_scope,
+        "lodging_kind": lodging_kind,
+        "party_known": bool(party_known),
+        "budget_scope": budget_scope,
+    }
+
+
+def must_pause(state: dict[str, Any] | None) -> list[str]:
+    """必须先停下来问用户的字段。顺序固定，测试和前端都依赖这个顺序。"""
+    if not state:
+        return []
+    paused: list[str] = []
+    for key in state.get("missing_critical") or []:
+        if key not in paused:
+            paused.append(key)
+    if state.get("missing_lodging") and "lodging" not in paused:
+        paused.append("lodging")
+    return paused
+
+
+def has_pending(state: dict[str, Any] | None) -> bool:
+    """有需要用户确认的项（不阻断，但结果页要显示「已生成，待补充」）。"""
+    if not state:
+        return False
+    return bool(state.get("lodging_pending")) or not bool(state.get("party_known"))
+
+
+def draft_pendings(state: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """不拦路、但要写进 `quality.pending` 的事情：人数与预算口径。"""
+    if not state:
+        return []
+    pendings: list[dict[str, Any]] = []
+    if not state.get("party_known"):
+        pendings.append(
+            {
+                "code": "party_unknown",
+                "message": "没说几个人，预算只能按人均口径先估算",
+                "action": "confirm_party",
+            }
+        )
+    if not state.get("budget_scope"):
+        pendings.append(
+            {
+                "code": "budget_scope_unknown",
+                "message": "预算总额还是人均没说明，先按总额理解",
+                "action": "confirm_budget_scope",
+            }
+        )
+    return pendings
+
+
+def pending_confirmations(state: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """需要用户点一下才算确认的项（住宿区域、人数、预算口径）。"""
+    if not state:
+        return []
+    items: list[dict[str, Any]] = []
+    if state.get("lodging_pending"):
+        items.append(
+            {
+                "field": "lodging",
+                "actions": ["exact", "area"],
+                "message": "住宿只给到区域，可以填具体酒店，也可以按该区域参考规划",
+            }
+        )
+    if not state.get("party_known"):
+        items.append({"field": "party_size", "actions": ["set"], "message": "几人均摊预算？"})
+    if not state.get("budget_scope"):
+        items.append(
+            {"field": "budget_scope", "actions": ["total", "per_person"], "message": "预算是总额还是人均？"}
+        )
+    return items
 
 
 def clarify_missing(slots: TravelSlots | None) -> list[str]:

@@ -5,6 +5,11 @@
     模型读写的是 /workspace/results/… 这种 Unix 风格路径，不是 Windows 盘符。
     CompositeBackend 把前缀映射到真实文件夹；高德 Skill 再包一层 ReadOnlyBackend，
     防止模型改写 skill 脚本。
+
+【历史模块，非当前主路径】
+    当前 stream_plan 不调用 create_deep_agent，也不再向模型暴露文件系统与 shell；
+    本模块只被 evals/test_gate.py 的历史用例覆盖。依赖 deepagents，缺包时导入不炸，
+    但 backend 为 None（能力不可用），由用例按需 skip。
 """
 
 from __future__ import annotations
@@ -14,14 +19,26 @@ import subprocess
 import sys
 from typing import Any
 
-from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend
-from deepagents.backends.protocol import (
-    PERMISSION_DENIED,
-    DeleteResult,
-    EditResult,
-    FileUploadResponse,
-    WriteResult,
-)
+try:  # deepagents 是可选依赖：缺包不影响 planner 主路径导入
+    from deepagents.backends import (
+        CompositeBackend,
+        FilesystemBackend,
+        LocalShellBackend,
+    )
+    from deepagents.backends.protocol import (
+        PERMISSION_DENIED,
+        DeleteResult,
+        EditResult,
+        FileUploadResponse,
+        WriteResult,
+    )
+
+    BACKENDS_AVAILABLE = True
+except ImportError:  # pragma: no cover - 取决于安装环境
+    CompositeBackend = FilesystemBackend = LocalShellBackend = None  # type: ignore[assignment]
+    PERMISSION_DENIED = "PERMISSION_DENIED"
+    DeleteResult = EditResult = FileUploadResponse = WriteResult = None  # type: ignore[assignment]
+    BACKENDS_AVAILABLE = False
 
 from planner.paths import CONFIG_DIR, CONSOLE_ENCODING, RESULTS_DIR, SKILL_DIR
 
@@ -90,13 +107,17 @@ def shell_env() -> dict[str, str]:
     return env
 
 
-backend = CompositeBackend(
-    default=LocalShellBackend(root_dir=str(SKILL_DIR), inherit_env=False, env=shell_env()),
-    routes={
-        "/workspace/results/": FilesystemBackend(root_dir=str(RESULTS_DIR), virtual_mode=True),
-        "/workspace/config/": FilesystemBackend(root_dir=str(CONFIG_DIR), virtual_mode=True),
-        "/workspace/skills/amap-lbs-skill/": ReadOnlyBackend(
-            FilesystemBackend(root_dir=str(SKILL_DIR), virtual_mode=True)
-        ),
-    },
+backend = (
+    CompositeBackend(
+        default=LocalShellBackend(root_dir=str(SKILL_DIR), inherit_env=False, env=shell_env()),
+        routes={
+            "/workspace/results/": FilesystemBackend(root_dir=str(RESULTS_DIR), virtual_mode=True),
+            "/workspace/config/": FilesystemBackend(root_dir=str(CONFIG_DIR), virtual_mode=True),
+            "/workspace/skills/amap-lbs-skill/": ReadOnlyBackend(
+                FilesystemBackend(root_dir=str(SKILL_DIR), virtual_mode=True)
+            ),
+        },
+    )
+    if BACKENDS_AVAILABLE
+    else None
 )

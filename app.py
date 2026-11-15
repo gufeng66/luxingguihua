@@ -157,10 +157,61 @@ def collect_slots_interactively(event: dict) -> TravelSlots:
     return filled
 
 
+def collect_pending_interactively(pending: list[dict] | None, base: dict) -> dict:
+    """终端里处理 clarify 事件带下来的「待确认项」。
+
+    网页端弹窗问的就是这三类：住宿只给到区域、几人均摊、预算口径。
+    这里同样问一遍，并把答案变成请求字段随下一轮传回（`mode="confirm"`），
+    否则命令行每轮都会重新澄清同一件事。
+    """
+    fields: dict[str, object] = {}
+    if not pending:
+        return fields
+    print("\n—— 需要你确认的项 ——")
+    for item in pending:
+        field = str(item.get("field") or "")
+        message = str(item.get("message") or "")
+        if field == "lodging":
+            print(f"住宿：{message}")
+            choice = _prompt_line("怎么处理住宿？1=填具体酒店，2=按该区域参考规划", "2")
+            if str(choice).strip() == "1":
+                hotel = _prompt_line("具体酒店名称", base.get("lodging") or None)
+                if hotel:
+                    # 住宿文本本身也要跟着改，否则确认只改了口径、酒店名还是原来那个区域。
+                    fields["lodging"] = str(hotel)
+                    fields["lodging_scope"] = "exact"
+            else:
+                fields["lodging_scope"] = "area"
+        elif field == "party_size":
+            print(f"人数：{message}")
+            while True:
+                raw = _prompt_line("一共几个人", None)
+                try:
+                    count = int(str(raw).strip())
+                except (TypeError, ValueError):
+                    print("人数请输入正整数。")
+                    continue
+                if count <= 0:
+                    print("人数请输入正整数。")
+                    continue
+                fields["party_size"] = count
+                break
+        elif field == "budget_scope":
+            print(f"预算口径：{message}")
+            choice = _prompt_line("1=总额，2=人均", "1")
+            fields["budget_scope"] = "per_person" if str(choice).strip() == "2" else "total"
+    return fields
+
+
 async def run_once(
     query: str,
     slots: TravelSlots | None = None,
     parent_plan_id: str | None = None,
+    *,
+    mode: str = "plan",
+    lodging_scope: str | None = None,
+    party_size: int | None = None,
+    budget_scope: str | None = None,
 ) -> dict | None:
     """跑一轮规划流水线，并把各类事件打印到控制台。
 
@@ -172,7 +223,15 @@ async def run_once(
     final_event: dict | None = None
     final_answer = None
     clarify_event: dict | None = None
-    async for event in stream_plan(query, slots=slots, parent_plan_id=parent_plan_id):
+    async for event in stream_plan(
+        query,
+        slots=slots,
+        parent_plan_id=parent_plan_id,
+        mode=mode,
+        lodging_scope=lodging_scope,
+        party_size=party_size,
+        budget_scope=budget_scope,
+    ):
         # 事件类型：status / step / clarify / token / final ...
         etype = event.get("type")
         if etype == "status":
@@ -226,6 +285,11 @@ async def run_once(
                 print(f"[地图]:{map_url}")
             if timings:
                 print(f"[耗时]:{timings}")
+            quality = event.get("quality") or {}
+            if quality:
+                print(f"[质量]:{quality.get('status')}")
+                for issue in quality.get("issues") or []:
+                    print(f"[质量问题]:{issue.get('message')}")
             if trace_url:
                 print(f"[LangSmith]:{trace_url}")
             elif os.getenv("LANGSMITH_API_KEY"):
@@ -246,16 +310,49 @@ async def run_once(
     return final_event
 
 
+async def _confirm_clarify(
+    pending: dict,
+    query: str,
+    parent_plan_id: str | None,
+) -> dict | None:
+    """终端里补完一轮 clarify 后，以 `mode="confirm"` 回传。
+
+    `query` 与 `parent_plan_id` 保留本轮上下文：首次规划澄清 → 原需求 + 无父方案；
+    修订触发澄清 → 原修改意见 + 父方案 ID。这样后端才能把这份槽位与父方案求差，
+    保留修改意图，也不会让旧槽位覆盖新意图。
+    """
+    confirmed = collect_slots_interactively(pending)
+    # 澄清事件里的「待确认项」在命令行同样要问：否则每轮都重新澄清同一件事。
+    extra = collect_pending_interactively(pending.get("pending"), confirmed.model_dump())
+    # 住宿文本是槽位，口径/人数是请求字段：前者并进 slots，后者留在 extra 里透传。
+    hotel = extra.pop("lodging", None)
+    if hotel:
+        confirmed = TravelSlots.model_validate({**confirmed.model_dump(), "lodging": hotel})
+    print("\n========== 确认后继续 ==========\n")
+    return await run_once(
+        query,
+        slots=confirmed,
+        parent_plan_id=parent_plan_id,
+        mode="confirm",
+        **extra,
+    )
+
+
 async def main(argv: list[str] | None = None) -> None:
-    """入口：先规划；若要澄清则终端补槽再跑；完成后可循环输入修订意见。"""
+    """入口：先规划；若要澄清则终端补槽再跑；完成后可循环输入修订意见。
+
+    澄清可能在首次规划或任意一轮修订中出现，且确认后仍可能再次返回 clarify，
+    所以用两个 `while` 循环一直处理到拿到 final 或用户结束为止，而不是只补一次。
+    """
     query = parse_query(argv if argv is not None else sys.argv[1:])
     print("\n========== 开始规划 ==========\n")
+    parent_plan_id: str | None = None
     pending = await run_once(query, slots=None)
-    if pending is not None and pending.get("type") == "clarify":
-        confirmed = collect_slots_interactively(pending)
-        print("\n========== 确认后继续 ==========\n")
-        pending = await run_once(query, slots=confirmed)
+    # 首次规划的澄清：补槽后以 confirm 续跑（无父方案）。
+    while pending is not None and pending.get("type") == "clarify":
+        pending = await _confirm_clarify(pending, query, parent_plan_id)
     while pending is not None and pending.get("type") == "final" and pending.get("plan_id"):
+        plan_id = str(pending.get("plan_id"))
         try:
             revision = input("\n输入修改意见（直接回车结束）：").strip()
         except (EOFError, KeyboardInterrupt):
@@ -264,7 +361,10 @@ async def main(argv: list[str] | None = None) -> None:
         if not revision:
             return
         print("\n========== 修订方案 ==========\n")
-        pending = await run_once(revision, parent_plan_id=str(pending.get("plan_id")))
+        pending = await run_once(revision, parent_plan_id=plan_id, mode="revise")
+        # 修订也可能触发澄清：补槽后以 confirm + 原修改意见 + 父方案 ID 续跑。
+        while pending is not None and pending.get("type") == "clarify":
+            pending = await _confirm_clarify(pending, revision, plan_id)
 
 
 # 只有「直接 python app.py」时才启动；被 import 时不自动跑

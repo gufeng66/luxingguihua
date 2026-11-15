@@ -7,7 +7,18 @@ CLI、Web、测试的导入入口。
 
 from __future__ import annotations
 
-from deepagents import create_deep_agent
+try:  # 历史主路径已不用 deepagents；缺包只影响该符号，不阻断导入
+    from deepagents import create_deep_agent as _real_create_deep_agent
+except ImportError:  # pragma: no cover - 取决于安装环境
+    _real_create_deep_agent = None  # type: ignore[assignment]
+
+
+def create_deep_agent(*args, **kwargs):
+    """历史符号/测试用，不是当前主路径；缺 deepagents 时调用给出有诊断意义的报错。"""
+    if _real_create_deep_agent is None:
+        raise RuntimeError("deepagents 未安装，当前主路径不使用 create_deep_agent")
+    return _real_create_deep_agent(*args, **kwargs)
+
 
 import planner.paths  # noqa: F401
 

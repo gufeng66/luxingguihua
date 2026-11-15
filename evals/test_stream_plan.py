@@ -158,7 +158,7 @@ async def test_stream_plan_parallel_map_ticket_steps(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(ps, "create_deep_agent", lambda **_k: agent)
 
     async def fake_summary(**kwargs):
-        assert kwargs.get("ticket_reason") == "ok"
+        assert kwargs.get("ticket_reason") == "missed"
         assert kwargs.get("map_reason") == "incomplete"
         yield {"type": "_summary_done", "content": "ok"}
 
@@ -243,7 +243,7 @@ async def test_stream_plan_missed_ticket_warning(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(ps, "stream_summary", fake_summary)
     events = [ev async for ev in ps.stream_plan("新乡坐高铁去郑州")]
-    assert any(e.get("type") == "warning" and e.get("code") == "ticket_not_dispatched" for e in events)
+    assert any(e.get("type") == "warning" and e.get("code") == "ticket_empty" for e in events)
 
 
 @pytest.mark.asyncio
@@ -311,6 +311,7 @@ async def test_map_only_revision_skips_extract_and_ticket(monkeypatch: pytest.Mo
                 destination="洛阳",
                 date="2026-09-26",
                 days=2,
+                lodging="洛阳老城酒店",
                 budget="中等",
                 preferences="轻松",
                 pace="舒适型节奏",
@@ -358,6 +359,8 @@ async def test_map_only_revision_skips_extract_and_ticket(monkeypatch: pytest.Mo
     ]
     extract_mock.assert_called_once()
     ticket_mock.assert_not_called()
+    assert any(e.get("type") == "final" for e in events)
+    assert not any(e.get("type") == "clarify" for e in events)
     slots_event = next(e for e in events if e.get("type") == "slots")
     assert slots_event["slots"]["avoid"] == ["龙门石窟"]
     assert slots_event["slots"]["must_visit"] == ["白马寺"]
@@ -386,29 +389,16 @@ async def test_stream_plan_map_uses_dispatch_timeout(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(ps, "extract_slots", AsyncMock(return_value=slots))
     monkeypatch.setattr(ps, "get_ticket_agent", AsyncMock(return_value=None))
     monkeypatch.setattr(ps, "build_llm", lambda: MagicMock())
-    monkeypatch.setenv("DISPATCH_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("PLAN_AGENT_SECONDS", "0.3")
+    monkeypatch.setenv("PLAN_BUDGET_SECONDS", "30")
+    monkeypatch.setenv("PLAN_CLOSEOUT_SECONDS", "1")
     monkeypatch.setenv("TRAVEL_MAP_FALLBACK", "0")
 
-    async def fake_astream(*_a, **_k):
-        yield {
-            "model": {
-                "messages": [
-                    _fake_ai_message(
-                        tool_calls=[{"name": "task", "id": "m1", "args": {"subagent_type": "map_agent"}}]
-                    )
-                ]
-            }
-        }
-        await asyncio.sleep(1.3)
-        yield {
-            "tools": {
-                "messages": [_fake_tool_message(content="已写地图 HTML", tool_call_id="m1")]
-            }
-        }
+    async def slow_map(**_kwargs):
+        await asyncio.sleep(2)
+        return {"text": "已写地图 HTML", "started": True, "timed_out": False, "tools": ["amap_poi_search"]}
 
-    agent = MagicMock()
-    agent.astream = fake_astream
-    monkeypatch.setattr(ps, "create_deep_agent", lambda **_k: agent)
+    monkeypatch.setattr("planner.subruns.run_map_agent", slow_map)
 
     async def fake_summary(**kwargs):
         assert kwargs.get("map_reason") == "timeout"
@@ -494,4 +484,138 @@ async def test_stream_plan_writes_fallback_map(tmp_path, monkeypatch: pytest.Mon
     assert any("补写路线地图" in str(e.get("message")) for e in events)
     finals = [e for e in events if e.get("type") == "final"]
     assert finals and str(finals[0].get("map_url", "")).endswith(".html")
+
+
+@pytest.mark.asyncio
+async def test_stream_plan_final_carries_cleanup_into_run_stats(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """m02971 P1-⑥：正常路径发 final 前完成清理，final/timings/RunStats 三处一致。
+
+    cleanup 必须是 final 顶层字段（timings.run_stats 是 as_dict() 拷贝，finally
+    追加的 notes 进不了已发 final），且要能被 server 通过同一个 RunStats 读到，
+    用于 SSE 超时/断连时补进 error 事件。
+    """
+    import planner.pipeline as pipeline
+    import planner_service as ps
+    from planner.run_stats import RunStats
+    from unittest.mock import AsyncMock, MagicMock
+
+    monkeypatch.setenv("TRAVEL_MAP_FALLBACK", "0")
+    monkeypatch.setattr(pipeline, "MAPS_DIR", tmp_path)
+    slots = TravelSlots(
+        origin="新乡", destination="北京", date="2026-10-10", days=3,
+        budget="5000", preferences="少折腾", lodging="北京西站附近",
+    )
+    monkeypatch.setattr(ps, "extract_slots", AsyncMock(return_value=slots))
+    # 无铁路意图 → ticket_agent=None，close_ticket_agent 只需处理 spec=None。
+    monkeypatch.setattr(ps, "get_ticket_agent", AsyncMock(return_value=None))
+    monkeypatch.setattr(ps, "build_llm", lambda: MagicMock())
+
+    async def fake_assemble(**_k):
+        return {
+            "plan": {
+                "days": [{"day": 1, "date": "2026-10-10", "items": [{"name": "天坛公园", "role": "visit"}], "notes": []}],
+                "conflicts": [], "notes": [], "schedule_status": "candidate",
+            },
+            "tasks": [], "unlocated": [], "facts_status": "unavailable",
+            "facts": [], "search_attempts": 0, "search_error": None,
+            "search_usage": None, "route_error": None,
+            "candidates": [{"poi_id": "tt", "name": "天坛公园"}],
+            "constraints": {"city": "北京"},
+            "context": "高德地点检索补写的路线地图",
+        }
+
+    monkeypatch.setattr(pipeline, "assemble_itinerary", fake_assemble)
+
+    async def fake_astream(*_a, **_k):
+        yield {"model": {"messages": [_fake_ai_message(content="已完成规划")]}}
+
+    agent = MagicMock()
+    agent.astream = fake_astream
+    monkeypatch.setattr(ps, "create_deep_agent", lambda **_k: agent)
+
+    async def fake_summary(**_kwargs):
+        yield {"type": "_summary_done", "content": "ok"}
+
+    monkeypatch.setattr(ps, "stream_summary", fake_summary)
+
+    stats = RunStats()
+    events = [ev async for ev in ps.stream_plan("这周六去北京3日游，预算 5000", run_stats=stats)]
+    finals = [e for e in events if e.get("type") == "final"]
+    assert finals, "应当正常走到 final"
+    final = finals[0]
+
+    cleanup = final.get("cleanup")
+    assert cleanup is not None
+    assert cleanup["drain_completed"] is True
+    assert cleanup["subagent_leak"] == []
+    # 本用例没有 MCP 连接：如实记录「无需关闭」，不能编造已关闭某个连接。
+    assert cleanup["mcp_close_started"] is False
+    assert cleanup["mcp_close_completed"] is True
+    assert cleanup["mcp_close_error"] is None
+
+    # timings 持久化与 RunStats 对象拿到的是同一份清理结果。
+    assert final["timings"]["cleanup"] == cleanup
+    assert stats.cleanup == cleanup
+    # 序列化后 cleanup 也要带上，供 SSE 超时分支读取。
+    assert stats.as_dict()["cleanup"] == cleanup
+
+
+@pytest.mark.asyncio
+async def test_stream_plan_passes_need_route_from_query(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """m02971 P1-⑤ 端到端：原话说「不查路线」时 need_route=False 一路传到 assemble_itinerary。
+
+    「不要路线图」只否决 HTML 产物，need_route 必须仍为 True——两个语义不能混。
+    """
+    import planner.pipeline as pipeline
+    import planner_service as ps
+    from unittest.mock import AsyncMock, MagicMock
+
+    monkeypatch.setenv("TRAVEL_MAP_FALLBACK", "1")
+    monkeypatch.setattr(pipeline, "MAPS_DIR", tmp_path)
+    slots = TravelSlots(
+        origin="新乡", destination="北京", date="2026-10-10", days=3,
+        budget="5000", preferences="少折腾", lodging="北京西站附近",
+    )
+    monkeypatch.setattr(ps, "extract_slots", AsyncMock(return_value=slots))
+    monkeypatch.setattr(ps, "get_ticket_agent", AsyncMock(return_value=None))
+    monkeypatch.setattr(ps, "build_llm", lambda: MagicMock())
+
+    seen: list[bool] = []
+
+    async def fake_assemble(**kwargs):
+        seen.append(bool(kwargs.get("need_route", True)))
+        return {
+            "plan": {
+                "days": [{"day": 1, "date": "2026-10-10", "items": [{"name": "天坛公园", "role": "visit"}], "notes": []}],
+                "conflicts": [], "notes": [], "schedule_status": "candidate",
+            },
+            "tasks": [], "unlocated": [], "facts_status": "unavailable",
+            "facts": [], "search_attempts": 0, "search_error": None,
+            "search_usage": None, "route_error": None,
+            "candidates": [{"poi_id": "tt", "name": "天坛公园"}],
+            "constraints": {"city": "北京"}, "context": "高德地点检索补写的路线地图",
+        }
+
+    monkeypatch.setattr(pipeline, "assemble_itinerary", fake_assemble)
+
+    async def fake_astream(*_a, **_k):
+        yield {"model": {"messages": [_fake_ai_message(content="已完成规划")]}}
+
+    agent = MagicMock()
+    agent.astream = fake_astream
+    monkeypatch.setattr(ps, "create_deep_agent", lambda **_k: agent)
+
+    async def fake_summary(**_kwargs):
+        yield {"type": "_summary_done", "content": "ok"}
+
+    monkeypatch.setattr(ps, "stream_summary", fake_summary)
+
+    events = [ev async for ev in ps.stream_plan("这周六去北京3日游，预算 5000，不查路线")]
+    assert [e for e in events if e.get("type") == "final"]
+    assert seen == [False], "不查路线时 need_route 必须为 False"
+
+    seen.clear()
+    events = [ev async for ev in ps.stream_plan("这周六去北京3日游，预算 5000，不要路线图")]
+    assert [e for e in events if e.get("type") == "final"]
+    assert seen == [True], "不要路线图只否决 HTML 产物，路线耗时仍要查"
 

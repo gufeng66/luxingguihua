@@ -1,0 +1,43 @@
+{
+  "version": "poi-gate-v1",
+  "acceptance": {
+    "sample_count": 30,
+    "critical_categories": ["no_structured_itinerary", "unlocated", "ambiguous_name", "lodging_or_station", "date_inapplicable", "reference_travel_time"],
+    "max_false_positive_rate": 0.1,
+    "max_false_negative_rate": 0.1,
+    "critical_false_positives": 0,
+    "dispute_policy": "第二名人工复核所有争议样本"
+  },
+  "samples": [
+    {"id":"verified-01","category":"verified_sight","critical":false,"expected":"允许白名单景点与已验证开放规则"},
+    {"id":"verified-02","category":"verified_sight","critical":false,"expected":"允许结构化第 1 天景点顺序"},
+    {"id":"verified-03","category":"verified_sight","critical":false,"expected":"允许适用日期的官方开放规则"},
+    {"id":"verified-04","category":"verified_sight","critical":false,"expected":"允许已解析 POI 名称"},
+    {"id":"verified-05","category":"verified_sight","critical":false,"expected":"允许结构化行程中的景点建议"},
+    {"id":"verified-06","category":"verified_sight","critical":false,"expected":"允许工具事实支持的交通建议"},
+    {"id":"no-itinerary-01","category":"no_structured_itinerary","critical":true,"expected":"禁止输出具体景点事实"},
+    {"id":"no-itinerary-02","category":"no_structured_itinerary","critical":true,"expected":"忽略原始 map_context 正文"},
+    {"id":"no-itinerary-03","category":"no_structured_itinerary","critical":true,"expected":"保留无可信行程告警"},
+    {"id":"no-itinerary-04","category":"no_structured_itinerary","critical":true,"expected":"不得虚构游览顺序"},
+    {"id":"unlocated-01","category":"unlocated","critical":true,"expected":"未定位普通景点不得写为已排入行程"},
+    {"id":"unlocated-02","category":"unlocated","critical":true,"expected":"未定位必去项必须保留冲突"},
+    {"id":"unlocated-03","category":"unlocated","critical":true,"expected":"坐标未知时不生成确定路线"},
+    {"id":"unlocated-04","category":"unlocated","critical":true,"expected":"不得把候选名称升级为已核实 POI"},
+    {"id":"alias-01","category":"ambiguous_name","critical":true,"expected":"同名 POI 不得任选一个"},
+    {"id":"alias-02","category":"ambiguous_name","critical":true,"expected":"别名冲突时保留待确认"},
+    {"id":"alias-03","category":"ambiguous_name","critical":true,"expected":"行政区不匹配不得合并"},
+    {"id":"alias-04","category":"ambiguous_name","critical":true,"expected":"同名站点不得当作景点"},
+    {"id":"role-01","category":"lodging_or_station","critical":true,"expected":"住宿 POI 不进入景点候选池"},
+    {"id":"role-02","category":"lodging_or_station","critical":true,"expected":"车站不进入景点候选池"},
+    {"id":"role-03","category":"lodging_or_station","critical":true,"expected":"区域住宿不得宣称已确认酒店"},
+    {"id":"role-04","category":"lodging_or_station","critical":true,"expected":"住宿/车站名称不得出现在游览顺序"},
+    {"id":"date-01","category":"date_inapplicable","critical":true,"expected":"过期开放规则降级为未知"},
+    {"id":"date-02","category":"date_inapplicable","critical":true,"expected":"冲突来源不得升级为已核实"},
+    {"id":"date-03","category":"date_inapplicable","critical":true,"expected":"未知旅行日期不得出现确定开放结论"},
+    {"id":"date-04","category":"date_inapplicable","critical":true,"expected":"非出行日证据不得适用"},
+    {"id":"time-01","category":"reference_travel_time","critical":true,"expected":"reference 耗时不得写为已核实"},
+    {"id":"time-02","category":"reference_travel_time","critical":true,"expected":"unknown 耗时不得写确定分钟"},
+    {"id":"time-03","category":"reference_travel_time","critical":true,"expected":"no_route 必须保留失败原因"},
+    {"id":"time-04","category":"reference_travel_time","critical":true,"expected":"not_queried 不得写为路线已核实"}
+  ]
+}

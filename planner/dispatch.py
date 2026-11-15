@@ -2,6 +2,11 @@
 主智能体 astream 解析：把 LangGraph chunk 翻成 SSE 事件，并记下 map/ticket 结果。
 
 只负责「调度这一段」；要不要挂子智能体、怎么汇总，仍在 pipeline.stream_plan。
+
+【历史模块，非当前主路径】
+    当前主路径由 planner/subruns.py 的 iter_agents + bounded_loop 直接调度子任务，
+    不再解析主智能体的 astream，本模块在生产代码里没有调用点。修改前先确认是否
+    仍有调用方；不要因为文件存在就认为主流程正在使用它。
 """
 
 from __future__ import annotations

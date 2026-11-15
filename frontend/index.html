@@ -4,210 +4,346 @@
   结构在本文件；交互在 app.js，验收场景稿在 samples.js。
   启动：python -m uvicorn server:app --reload --host 127.0.0.1 --port 8000
   然后打开 http://127.0.0.1:8000/
-
-  区块：顶栏状态 → 输入与验收场景 → HITL 确认卡 → 左侧进度 / 右侧方案与地图
 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>旅游规划多智能体</title>
-  <link rel="stylesheet" href="/style.css?v=sample" />
+  <title>旅游规划</title>
+  <link rel="stylesheet" href="/style.css?v=read10" />
   <script src="/vendor/vue.global.prod.js"></script>
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
 </head>
 <body>
   <div id="app">
+  <div :class="['page-root', 'phase-' + phase, { 'is-sidebar-closed': !sidebarOpen }]">
     <header class="app-header">
-      <h1 class="brand">旅游规划多智能体</h1>
-      <div class="status-badge" :class="statusBadgeClass" role="status">
-        <span class="status-spinner" v-if="loading" aria-hidden="true"></span>
-        <span class="status-dot" v-else aria-hidden="true"></span>
-        {{ statusLabel }}
+      <div class="brand-block">
+        <p class="brand">旅游规划</p>
+        <p class="brand-note">写出能照着走的行程</p>
+      </div>
+      <div class="header-actions">
+        <label class="field access-key">
+          <span class="field-label">服务访问口令</span>
+          <input v-model="accessKey" type="password" autocomplete="current-password" placeholder="服务启用后填写" />
+        </label>
+        <button
+          v-if="!sidebarOpen && phase !== 'idle'"
+          type="button"
+          class="btn btn-quiet sidebar-toggle"
+          @click="sidebarOpen = true"
+        >需求与进度</button>
+        <div class="status-badge" :class="statusBadgeClass" role="status" aria-live="polite">
+          <span class="status-spinner" v-if="phase === 'running'" aria-hidden="true"></span>
+          <span class="status-dot" v-else aria-hidden="true"></span>
+          {{ statusLabel }}
+        </div>
       </div>
     </header>
 
     <div class="page">
-      <div class="panel input-panel">
-        <textarea v-model="query" maxlength="300" placeholder="例如：帮我规划下周六从杭州去苏州一日游，预算 800..." :disabled="awaitingClarify"></textarea>
-        <div class="demo-chips" aria-label="端到端验收场景">
-          <button
-            v-for="chip in demoChips"
-            :key="chip.id"
-            type="button"
-            class="chip"
-            :disabled="loading || awaitingClarify"
-            :title="chip.hint || chip.query"
-            @click="applyChip(chip)"
-          >{{ chip.label }}</button>
-        </div>
-        <p class="chip-hint" v-if="chipHint">{{ chipHint }}</p>
-        <div class="actions">
-          <button class="btn btn-primary" :disabled="!canSubmit" @click="startPlan">
-            {{ loading ? "规划中..." : "开始规划" }}
-          </button>
-          <span class="char-count">{{ queryLen }}/300</span>
-        </div>
-      </div>
-
-      <div class="panel clarify-card" v-if="awaitingClarify">
-        <h2 class="section-title">请确认旅行参数</h2>
-        <p class="clarify-hint">标红项为关键信息，补全后才能继续；灰色标注为未提供时的默认值，可直接改或点继续。</p>
-        <div class="clarify-grid">
-          <label v-for="key in ['origin','destination','lodging','date','days','budget','preferences','pace','must_visit','avoid','transport_mode']" :key="key"
-            :class="{ 'is-critical-missing': isCriticalMissing(key) }">
-            <span class="field-label">
-              {{ slotLabel(key) }}
-              <em v-if="isDefaultApplied(key)" class="default-tag">未提供，已用默认</em>
-            </span>
-            <select v-if="key === 'transport_mode'" v-model="clarifyForm.transport_mode">
-              <option value="public_transit">公共交通</option>
-              <option value="driving">自驾</option>
-              <option value="walking">步行</option>
-            </select>
-            <textarea v-else-if="key === 'must_visit' || key === 'avoid' || key === 'preferences'" v-model="clarifyForm[key]" rows="2"></textarea>
-            <input v-else-if="key === 'days'" v-model.number="clarifyForm.days" type="number" min="1" max="30" />
-            <input v-else v-model="clarifyForm[key]" :type="key === 'date' ? 'date' : 'text'" />
-          </label>
-        </div>
-        <div class="actions">
-          <button class="btn btn-primary" :disabled="!canConfirmClarify" @click="confirmClarify">确认并继续</button>
-        </div>
-      </div>
-
       <div class="workspace">
-        <aside class="process-col">
-          <div class="process-panel">
-            <button
-              type="button"
-              class="process-toggle"
-              :aria-expanded="processExpanded ? 'true' : 'false'"
-              @click="toggleProcess"
-            >
-              <span class="process-toggle-kicker">执行过程</span>
-              <span class="process-toggle-meta">{{ processSummary }}</span>
-            </button>
-
-            <div class="process-body" v-show="processExpanded">
-              <div class="steps" v-if="steps.some(s => s.status !== 'pending') || loading || awaitingClarify">
-                <div
-                  v-for="step in steps"
-                  :key="step.id"
-                  class="step-card"
-                  :class="'status-' + step.status"
-                >
-                  <div class="step-head">
-                    <span class="step-spinner" v-if="step.status === 'active'" aria-hidden="true"></span>
-                    <span class="step-mark" v-else-if="step.status === 'done'">✓</span>
-                    <span class="step-mark muted" v-else-if="step.status === 'skipped'">—</span>
-                    <span class="step-mark muted" v-else>○</span>
-                    <strong>{{ step.label }}</strong>
-                    <span class="step-head-end">
-                      <span class="step-status-text">{{
-                        step.status === 'active' ? '进行中' :
-                        step.status === 'done' ? '完成' :
-                        step.status === 'skipped' ? '已跳过' : '等待'
-                      }}</span>
-                      <span class="step-meta" v-if="step.elapsedMs != null">{{ step.elapsedMs }}ms</span>
-                      <span class="step-meta" v-if="step.reason">{{ step.reason }}</span>
-                    </span>
-                  </div>
-                  <ul class="step-tools" v-if="step.tools.length">
-                    <li v-for="(t, idx) in step.tools" :key="idx">
-                      <details>
-                        <summary>{{ t.name }}</summary>
-                        <pre class="tool-params">{{ JSON.stringify(t.args, null, 2) }}</pre>
-                        <pre v-if="t.result" class="tool-params">{{ t.result }}</pre>
-                      </details>
-                    </li>
-                  </ul>
-                </div>
-              </div>
-              <p class="empty" v-else>尚未开始。点击「开始规划」后，这里会按步骤显示进度。</p>
+        <aside class="rail" aria-label="需求与进度">
+          <div class="rail-card">
+            <div class="rail-head">
+              <h1>从一句话开始</h1>
+              <button
+                v-if="phase !== 'idle'"
+                type="button"
+                class="btn btn-quiet rail-close"
+                @click="sidebarOpen = false"
+              >收起</button>
             </div>
-
-            <p class="warning-banner" v-if="warningText">{{ warningText }}</p>
+            <label class="composer-label" for="trip-query">你的行程需求</label>
+            <textarea
+              id="trip-query"
+              v-model="query"
+              maxlength="300"
+              placeholder="例如：这周六从新乡坐高铁去郑州一日游，预算 500，少折腾"
+              :disabled="awaitingClarify"
+            ></textarea>
+            <div class="composer-foot">
+              <button class="btn btn-primary" :disabled="!canSubmit" @click="startPlan">
+                {{ phase === 'running' ? "正在规划" : "开始规划" }}
+              </button>
+              <span class="char-count">{{ queryLen }}/300</span>
+            </div>
+            <p class="composer-next" v-if="clarifyDeferred">
+              已暂时收起补充信息。
+              <button type="button" class="link-btn" @click="resumeClarify">继续补充</button>
+            </p>
+            <p class="composer-next" v-if="phase === 'idle'">写好之后，每天怎么走会接着出现。也可以先看一个示例。</p>
+            <div class="samples">
+              <p class="samples-label" id="sample-label">先看示例</p>
+              <div class="demo-chips" role="group" aria-labelledby="sample-label">
+                <button
+                  v-for="chip in demoChips"
+                  :key="chip.id"
+                  type="button"
+                  class="chip"
+                  :disabled="loading || awaitingClarify"
+                  :title="chip.hint || chip.query"
+                  @click="applyChip(chip)"
+                >{{ chip.label }}</button>
+              </div>
+              <p class="chip-hint" v-if="chipHint">{{ chipHint }}</p>
+            </div>
           </div>
+
+          <section class="rail-card progress-card" v-if="showProgress" aria-label="规划进度">
+            <h2>这次做到哪了</h2>
+            <div class="step-list">
+              <div v-for="group in stepGroups" :key="group.id" :class="group.pair ? 'step-pair' : 'step-single'">
+                <p class="pair-caption" v-if="group.pair">这两项同时进行，不分先后。</p>
+                <article
+                  v-for="step in group.steps"
+                  :key="step.id"
+                  class="step"
+                  :class="'is-' + step.status"
+                >
+                  <div class="step-line">
+                    <span class="step-spinner" v-if="step.status === 'active'" aria-hidden="true"></span>
+                    <span class="step-mark" v-else aria-hidden="true"></span>
+                    <span class="step-name">{{ step.label }}</span>
+                    <span class="step-state">{{ stepStateText(step.status) }}</span>
+                  </div>
+                  <details class="step-record" v-if="step.reason || step.elapsedMs != null || step.tools.length">
+                    <summary>这一步的记录</summary>
+                    <p v-if="step.reason">{{ reasonText(step.reason) }}（{{ step.reason }}）</p>
+                    <p v-if="step.elapsedMs != null">用时 {{ step.elapsedMs }} 毫秒</p>
+                    <ul class="step-tools" v-if="step.tools.length">
+                      <li v-for="(t, idx) in step.tools" :key="idx">
+                        <details>
+                          <summary>{{ t.name }}</summary>
+                          <pre class="tool-params">{{ JSON.stringify(t.args, null, 2) }}</pre>
+                          <pre v-if="t.result" class="tool-params">{{ t.result }}</pre>
+                        </details>
+                      </li>
+                    </ul>
+                  </details>
+                </article>
+              </div>
+            </div>
+          </section>
         </aside>
 
-        <section class="result-col">
-          <div class="result-stage">
-            <div class="result-tabs" role="tablist">
+        <main class="read" v-show="phase !== 'idle'">
+
+          <div class="stage" ref="resultStart">
+            <div class="now" v-if="nowTitle && phase !== 'clarify'">
+              <p class="now-title">{{ nowTitle }}</p>
+              <p class="now-text" v-if="nowDetail">{{ nowDetail }}</p>
+            </div>
+
+            <ul class="alert-list" v-if="warnings.length" aria-label="需要注意">
+              <li class="alert" v-for="item in warnings" :key="item.key">{{ item.message }}</li>
+            </ul>
+            <div class="next-step" v-if="phase === 'done' && pendingCount">
+              <p class="next-step-text">有 {{ pendingCount }} 项要你确认后才能算定：{{ pendingHint }}</p>
+              <button type="button" class="btn btn-primary" @click="openConfirmFromResult">补充这些信息</button>
+            </div>
+            <p class="limit" v-if="quality && phase === 'done'">{{ qualityHeadline }}</p>
+            <div class="issue-groups" v-if="quality && (issueGroups.need.length || issueGroups.unfinished.length)">
+              <section class="issue-block" v-if="issueGroups.need.length">
+                <h3>需要你补充</h3>
+                <ul class="issue-list">
+                  <li v-for="item in issueGroups.need" :key="'need-' + issueKey(item)" :class="item.kind ? 'is-' + item.kind : null">
+                    <span class="issue-text">{{ item.message }}</span>
+                    <p class="tech-reasons" v-for="(line, li) in issueDetailLines(item)" :key="'need-detail-' + li">{{ line }}</p>
+                    <!-- 住宿参考地点候选：点一下预填到确认弹窗，提交后走既有 mode="confirm" -->
+                    <ul class="sources" v-if="(item.action === 'retry_lodging' || item.action === 'retry_lodging_edit') && Array.isArray(item.options) && item.options.length">
+                      <li v-for="(opt, idx) in item.options" :key="'lodging-' + idx">
+                        <button type="button" class="btn btn-quiet" @click="openConfirmFromResult({ lodging: String(opt) })">{{ opt }}</button>
+                      </li>
+                    </ul>
+                    <div class="actions" v-if="issueActions(item).length">
+                      <button
+                        v-for="act in issueActions(item)"
+                        :key="act.key"
+                        type="button"
+                        class="btn btn-quiet"
+                        @click="runIssueAction(item, act)"
+                      >{{ act.label }}</button>
+                    </div>
+                    <div class="sources" v-if="openingIssueKey === issueKey(item)">
+                      <ul>
+                        <li v-for="src in openingSources(item)" :key="src.key">
+                          <a v-if="safeHref(src.url)" :href="safeHref(src.url)" target="_blank" rel="noopener">{{ src.label }}</a>
+                          <span v-else>{{ src.label }}</span>
+                          <span v-if="src.kind">（{{ src.kind }}）</span>
+                          <span v-if="src.applies_on"> {{ src.applies_on }}</span>
+                          <span v-if="src.quote">：{{ src.quote }}</span>
+                          <span v-if="src.queried_at"> {{ src.queried_at }}</span>
+                        </li>
+                        <li v-if="!openingSources(item).length">尚无可用依据</li>
+                      </ul>
+                    </div>
+                  </li>
+                </ul>
+              </section>
+              <section class="issue-block" v-if="visibleSystemIssues.length">
+                <h3>重要提示</h3>
+                <ul class="issue-list">
+                  <li v-for="item in visibleSystemIssues" :key="'todo-' + issueKey(item)" :class="item.kind ? 'is-' + item.kind : null">
+                    <span class="issue-text">{{ item.message }}</span>
+                    <p class="tech-reasons" v-for="(line, li) in issueDetailLines(item)" :key="'todo-detail-' + li">{{ line }}</p>
+                    <div class="actions" v-if="issueActions(item).length">
+                      <button
+                        v-for="act in issueActions(item)"
+                        :key="act.key"
+                        type="button"
+                        class="btn btn-quiet"
+                        @click="runIssueAction(item, act)"
+                      >{{ act.label }}</button>
+                    </div>
+                    <div class="sources" v-if="openingIssueKey === issueKey(item)">
+                      <ul>
+                        <li v-for="src in openingSources(item)" :key="src.key">
+                          <a v-if="safeHref(src.url)" :href="safeHref(src.url)" target="_blank" rel="noopener">{{ src.label }}</a>
+                          <span v-else>{{ src.label }}</span>
+                          <span v-if="src.kind">（{{ src.kind }}）</span>
+                          <span v-if="src.applies_on"> {{ src.applies_on }}</span>
+                          <span v-if="src.quote">：{{ src.quote }}</span>
+                          <span v-if="src.queried_at"> {{ src.queried_at }}</span>
+                        </li>
+                        <li v-if="!openingSources(item).length">尚无可用依据</li>
+                      </ul>
+                    </div>
+                  </li>
+                </ul>
+              </section>
+              <details class="issue-block verification-group" v-for="group in verificationGroups" :key="group.code">
+                <summary>{{ group.label }} {{ group.items.length }} {{ group.unit }} · 展开详情</summary>
+                <ul class="issue-list">
+                  <li v-for="item in group.items" :key="'todo-' + issueKey(item)" :class="item.kind ? 'is-' + item.kind : null">
+                    <span class="issue-text">{{ item.message }}</span>
+                    <p class="tech-reasons" v-for="(line, li) in issueDetailLines(item)" :key="'todo-detail-' + li">{{ line }}</p>
+                    <div class="actions" v-if="issueActions(item).length">
+                      <button
+                        v-for="act in issueActions(item)"
+                        :key="act.key"
+                        type="button"
+                        class="btn btn-quiet"
+                        @click="runIssueAction(item, act)"
+                      >{{ act.label }}</button>
+                    </div>
+                    <div class="sources" v-if="openingIssueKey === issueKey(item)">
+                      <ul>
+                        <li v-for="src in openingSources(item)" :key="src.key">
+                          <a v-if="safeHref(src.url)" :href="safeHref(src.url)" target="_blank" rel="noopener">{{ src.label }}</a>
+                          <span v-else>{{ src.label }}</span>
+                          <span v-if="src.kind">（{{ src.kind }}）</span>
+                          <span v-if="src.applies_on"> {{ src.applies_on }}</span>
+                          <span v-if="src.quote">：{{ src.quote }}</span>
+                          <span v-if="src.queried_at"> {{ src.queried_at }}</span>
+                        </li>
+                        <li v-if="!openingSources(item).length">尚无可用依据</li>
+                      </ul>
+                    </div>
+                  </li>
+                </ul>
+              </details>
+            </div>
+            <details class="sources" v-if="groupedSources.length">
+              <summary>{{ sourcesSummary }}</summary>
+              <ul>
+                <li v-for="item in groupedSources" :key="item.ref + item.url">
+                  <a v-if="safeHref(item.url)" :href="safeHref(item.url)" target="_blank" rel="noopener">{{ item.label || item.ref || '来源' }}</a>
+                  <span v-else>{{ item.label || item.ref || '票务原文' }}</span>
+                  <span v-if="item.record_count > 1"> · {{ item.record_count }} 次查询</span>
+                  <span v-if="item.fact_count > item.record_count">，{{ item.fact_count }} 条记录</span>
+                  <span v-if="item.queried_at"> {{ item.queried_at }}</span>
+                </li>
+              </ul>
+            </details>
+
+            <div class="result-tabs" role="tablist" aria-label="行程或地图" @keydown="onResultTabKey">
               <button
                 type="button"
                 class="tab-btn"
                 role="tab"
+                id="tab-plan"
+                ref="tabPlan"
+                aria-controls="panel-plan"
+                :tabindex="resultTab === 'plan' ? 0 : -1"
                 :class="{ 'is-active': resultTab === 'plan' }"
                 :aria-selected="resultTab === 'plan' ? 'true' : 'false'"
                 @click="resultTab = 'plan'"
-              >行程方案</button>
+              >行程</button>
               <button
                 type="button"
                 class="tab-btn"
                 role="tab"
+                id="tab-map"
+                ref="tabMap"
+                aria-controls="panel-map"
+                :tabindex="resultTab === 'map' ? 0 : -1"
                 :class="{ 'is-active': resultTab === 'map' }"
                 :aria-selected="resultTab === 'map' ? 'true' : 'false'"
                 @click="resultTab = 'map'"
               >
-                路线地图
+                地图
                 <span class="tab-dot" v-if="mapUrl" aria-label="已生成地图"></span>
               </button>
             </div>
 
-            <div class="result-card" v-show="resultTab === 'plan'">
-              <div class="result-card-head">
-                <div class="result-card-titles">
-                  <h2 class="section-title">最终方案</h2>
-                  <details class="timings timings-details" v-if="timings">
-                    <summary>耗时 {{ formatSeconds(timings.total_ms) }}s</summary>
-                    <p class="timings-breakdown">
-                      理解 {{ timings.understand_ms }} / MCP {{ timings.ticket_mcp_ms }} / 调度 {{ timings.dispatch_ms }} / 汇总 {{ timings.summary_ms }}{{ timings.parallel_dispatch ? ' · 同超步发出 map+ticket' : '' }}
-                    </p>
-                  </details>
-                </div>
-                <div class="result-actions" v-if="finalText">
-                  <button type="button" class="btn btn-ghost" @click="copyFinal">{{ copyLabel }}</button>
-                  <button v-if="mapUrl" type="button" class="btn btn-ghost" @click="downloadReport">下载</button>
-                  <a v-else-if="savedUrl" class="btn btn-ghost" :href="savedUrl" download>下载</a>
-                  <a v-if="traceUrl" class="btn btn-ghost" :href="traceUrl" target="_blank" rel="noopener">LangSmith</a>
-                </div>
+            <div class="result-card" v-show="resultTab === 'plan'" id="panel-plan" role="tabpanel" aria-labelledby="tab-plan">
+              <div class="result-actions" v-if="finalReady">
+                <button type="button" class="btn btn-quiet" @click="copyFinal">{{ copyLabel }}</button>
+                <button v-if="mapUrl" type="button" class="btn btn-quiet" @click="downloadReport">下载</button>
+                <a v-else-if="safeHref(savedUrl)" class="btn btn-quiet" :href="safeHref(savedUrl)" download>下载</a>
               </div>
 
-              <div
-                class="result-scroll"
-                ref="resultBody"
-                @scroll="onResultScroll"
-              >
-                <p class="sample-note" v-if="sampleNote && finalText">{{ sampleNote }}</p>
+              <div class="itinerary" ref="itinerary">
+                <p class="draft-note" v-if="draftNote">{{ draftNote }}</p>
                 <div class="result markdown-body" v-if="finalText" v-html="renderedHtml"></div>
-                <p class="empty" v-else-if="errorText">{{ errorText }}</p>
-                <div class="result-empty" v-else-if="loading">
+                <div class="result-empty" v-else-if="phase === 'running'">
                   <span class="step-spinner" aria-hidden="true"></span>
-                  <p class="empty">正在生成方案，请稍候</p>
+                  <p>正在生成方案，写出的内容会接着出现在这里。</p>
+                </div>
+                <div class="result-empty" v-else-if="phase === 'failed' && !finalText">
+                  <p>改一下行程需求，再点开始规划。</p>
                 </div>
                 <div class="result-empty" v-else>
-                  <svg class="result-empty-icon" viewBox="0 0 64 64" aria-hidden="true">
-                    <rect x="6" y="10" width="52" height="44" rx="4" fill="none" stroke="currentColor" stroke-width="2"/>
-                    <path d="M14 22h36M14 32h24M14 42h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    <circle cx="46" cy="42" r="7" fill="none" stroke="currentColor" stroke-width="2"/>
-                    <path d="M46 39v4h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                  </svg>
-                  <p class="empty">输入需求并开始规划后，最终方案会显示在这里</p>
+                  <p>行程会写在这里。</p>
                 </div>
+                <span ref="resultEnd"></span>
               </div>
 
+              <details class="tech" v-if="timings || traceUrl || (quality && phase === 'done')">
+                <summary>技术记录</summary>
+                <p v-if="quality">
+                  质量状态 {{ quality.status }}<span v-if="quality.coverage">。开放规则 {{ quality.coverage.opening_rules.label }}。交通耗时 {{ quality.coverage.travel_time.label }}</span>
+                </p>
+                <ul class="tech-reasons" v-if="techReasons.length">
+                  <li v-for="item in techReasons" :key="item">{{ item }}</li>
+                </ul>
+                <details v-if="scheduleDiagnostics.length">
+                  <summary>每日排程诊断</summary>
+                  <ul class="tech-reasons">
+                    <li v-for="item in scheduleDiagnostics" :key="item">{{ item }}</li>
+                  </ul>
+                </details>
+                <p v-if="timings">
+                  总用时 {{ formatSeconds(timings.total_ms) }} 秒。理解 {{ timings.understand_ms }} 毫秒，车票 {{ timings.ticket_mcp_ms }} 毫秒，调度 {{ timings.dispatch_ms }} 毫秒，汇总 {{ timings.summary_ms }} 毫秒。
+                  <span v-if="timings.parallel_dispatch">查车票和找景点是一起发出的。</span>
+                </p>
+                <p v-if="safeHref(traceUrl)"><a :href="safeHref(traceUrl)" target="_blank" rel="noopener">打开 LangSmith</a></p>
+              </details>
+
               <div class="revise-tail" v-if="lastPlanId && !awaitingClarify">
-                <h2 class="section-title">修改方案</h2>
-                <textarea v-model="reviseQuery" maxlength="300" placeholder="例如：不要龙门石窟，改白马寺，路线顺一点" :disabled="loading"></textarea>
+                <h2>修改这段行程</h2>
+                <label class="composer-label" for="revise-query">想改什么</label>
+                <textarea id="revise-query" ref="reviseBox" v-model="reviseQuery" maxlength="300" placeholder="例如：不要龙门石窟，改白马寺，路线顺一点" :disabled="loading"></textarea>
                 <div class="actions">
                   <button class="btn btn-primary" :disabled="!reviseQuery.trim() || loading" @click="startRevise">提交修改</button>
                 </div>
               </div>
             </div>
 
-            <div class="map-pane" ref="mapPane" v-show="resultTab === 'map'">
+            <div class="map-pane" ref="mapPane" v-show="resultTab === 'map'" id="panel-map" role="tabpanel" aria-labelledby="tab-map">
               <div class="map-toolbar" v-if="mapUrl">
                 <div class="map-days" v-if="mapDays.length > 1" role="tablist" aria-label="按天查看路线">
                   <button
@@ -229,21 +365,24 @@
                     @click="setMapDay(day)"
                   >第{{ day }}天</button>
                 </div>
-                <button type="button" class="btn btn-ghost" @click="openAmapPreview">高德预览</button>
-                <button v-if="amapAppUrl" type="button" class="btn btn-ghost" @click="openAmapApp">高德App看首站</button>
-                <button type="button" class="btn btn-ghost" @click="toggleMapFullscreen">{{ mapFullscreen ? "退出全屏" : "全屏" }}</button>
+                <button type="button" class="btn btn-quiet" @click="openAmapPreview">高德预览</button>
+                <button v-if="amapAppUrl" type="button" class="btn btn-quiet" @click="openAmapApp">高德 App 看首站</button>
+                <button type="button" class="btn btn-quiet" @click="toggleMapFullscreen">{{ mapFullscreen ? "退出全屏" : "全屏" }}</button>
               </div>
               <!--
-                地图 HTML 由模型生成，iframe 需要沙箱。
+                地图 HTML 是生成内容，iframe 必须沙箱。
                 但「在高德在线地图打开」是 target=_blank，缺 allow-popups 时点击会被浏览器静默吃掉；
                 allow-popups-to-escape-sandbox 让弹出的高德页不要继承沙箱，否则高德脚本可能无法运行。
+                刻意不给 allow-scripts + allow-same-origin 同时出现：那等于让被沙箱的页面自己拆掉沙箱，
+                地图页就能读到父页面的 DOM 与 Cookie。去掉 allow-same-origin 后 iframe 变成不透明源，
+                父页也不再往里注脚本，沙箱内链接靠 allow-popups 自己弹出。
               -->
               <iframe
                 v-if="mapUrl && mapViewerHtml"
                 class="map-frame"
                 ref="mapFrame"
                 :srcdoc="mapViewerHtml"
-                sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+                sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
                 referrerpolicy="no-referrer"
                 title="路线地图"
                 @load="onMapFrameLoad"
@@ -253,20 +392,151 @@
                 class="map-frame"
                 ref="mapFrame"
                 :src="mapUrl"
-                sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+                sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
                 referrerpolicy="no-referrer"
                 title="路线地图"
                 @load="onMapFrameLoad"
               ></iframe>
-              <p class="empty" v-else>{{ warningText || "本次未生成路线地图" }}</p>
+              <p class="map-empty" v-else>{{ warnings[0] || "这次还没有路线地图" }}</p>
             </div>
           </div>
-        </section>
+        </main>
       </div>
     </div>
   </div>
-  <script src="/map.js?v=sample"></script>
-  <script src="/samples.js?v=sample"></script>
-  <script src="/app.js?v=lodging-loop"></script>
+
+  <dialog
+    class="confirm-dialog"
+    ref="confirmDialog"
+    aria-labelledby="confirm-title"
+    @cancel.prevent="closeConfirm"
+  >
+    <form method="dialog" class="confirm-body" @submit.prevent="submitConfirm(confirmSource)">
+      <h2 id="confirm-title">{{ confirmSource === 'clarify' ? '请补全出行信息' : '补充你确认的信息' }}</h2>
+      <p class="clarify-hint">
+        标出的是还不能继续的项。灰色小字表示没写时用的默认值，可以直接改。
+        <template v-if="confirmSource !== 'clarify'">改完提交后只重算受影响的部分，不会重新查一遍全部内容。</template>
+      </p>
+      <p id="confirm-missing" class="field-error" v-if="!canConfirmClarify">请补全标出的项后再继续。</p>
+
+      <div class="confirm-pending" v-if="confirmList.length">
+        <h3>需要你确认</h3>
+        <ul>
+          <li v-for="item in confirmList" :key="item.field">{{ item.message }}</li>
+        </ul>
+      </div>
+
+      <div class="clarify-block" v-if="clarifySections.need.length">
+        <h3>还需要补充</h3>
+        <div class="clarify-grid">
+          <label v-for="key in clarifySections.need" :key="key" class="field is-missing">
+            <span class="field-label">
+              {{ slotLabel(key) }}
+              <em v-if="isDefaultApplied(key)" class="default-tag">未提供，已用默认</em>
+            </span>
+            <select v-if="key === 'transport_mode'" v-model="clarifyForm.transport_mode">
+              <option value="public_transit">公共交通</option>
+              <option value="driving">自驾</option>
+              <option value="walking">步行</option>
+            </select>
+            <textarea v-else-if="key === 'must_visit' || key === 'avoid' || key === 'preferences'" v-model="clarifyForm[key]" rows="2"></textarea>
+            <input v-else-if="key === 'days'" v-model.number="clarifyForm.days" type="number" min="1" max="30" />
+            <input v-else v-model="clarifyForm[key]" :type="key === 'date' ? 'date' : 'text'" />
+            <span class="field-error" v-if="key === 'days' ? !clarifyForm.days : !String(clarifyForm[key] || '').trim()">请填写{{ slotLabel(key) }}</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="clarify-block" v-if="clarifySections.known.length">
+        <h3>已经识别</h3>
+        <div class="clarify-grid">
+          <label v-for="key in clarifySections.known" :key="key" class="field">
+            <span class="field-label">
+              {{ slotLabel(key) }}
+              <em v-if="isDefaultApplied(key)" class="default-tag">未提供，已用默认</em>
+            </span>
+            <select v-if="key === 'transport_mode'" v-model="clarifyForm.transport_mode">
+              <option value="public_transit">公共交通</option>
+              <option value="driving">自驾</option>
+              <option value="walking">步行</option>
+            </select>
+            <textarea v-else-if="key === 'must_visit' || key === 'avoid' || key === 'preferences'" v-model="clarifyForm[key]" rows="2"></textarea>
+            <input v-else-if="key === 'days'" v-model.number="clarifyForm.days" type="number" min="1" max="30" />
+            <input v-else v-model="clarifyForm[key]" :type="key === 'date' ? 'date' : 'text'" />
+          </label>
+        </div>
+      </div>
+
+      <div class="clarify-block">
+        <h3>口径与确认</h3>
+        <div class="clarify-grid">
+          <label class="field">
+            <span class="field-label">跨城出行</span>
+            <select v-model="clarifyForm.intercity_mode">
+              <option value="">沿用已识别方式</option>
+              <option value="rail">高铁 / 火车</option>
+              <option value="driving">自驾</option>
+              <option value="plane">飞机</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">返程安排</span>
+            <select v-model="clarifyForm.return_required">
+              <option value="">沿用当前安排</option>
+              <option value="true">需要返程</option>
+              <option value="false">单程</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">几个人</span>
+            <input v-model="clarifyForm.party_size" type="number" min="1" max="50" placeholder="填了才能算清预算" />
+          </label>
+          <label class="field">
+            <span class="field-label">预算口径</span>
+            <select v-model="clarifyForm.budget_scope">
+              <option value="">先按总额理解</option>
+              <option value="total">总额</option>
+              <option value="per_person">人均</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">住宿怎么处理</span>
+            <select v-model="clarifyForm.lodging_scope">
+              <option value="">有具体酒店就填在上面</option>
+              <option value="exact">我知道具体酒店</option>
+              <option value="area">按该区域参考规划</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <details class="extra-prefs" v-if="clarifySections.extra.length">
+        <summary>其他偏好</summary>
+        <div class="clarify-grid">
+          <label v-for="key in clarifySections.extra" :key="key" class="field">
+            <span class="field-label">{{ slotLabel(key) }}</span>
+            <select v-if="key === 'transport_mode'" v-model="clarifyForm.transport_mode">
+              <option value="public_transit">公共交通</option>
+              <option value="driving">自驾</option>
+              <option value="walking">步行</option>
+            </select>
+            <textarea v-else-if="key === 'must_visit' || key === 'avoid' || key === 'preferences'" v-model="clarifyForm[key]" rows="2"></textarea>
+            <input v-else-if="key === 'days'" v-model.number="clarifyForm.days" type="number" min="1" max="30" />
+            <input v-else v-model="clarifyForm[key]" :type="key === 'date' ? 'date' : 'text'" />
+          </label>
+        </div>
+      </details>
+
+      <div class="actions">
+        <button type="submit" class="btn btn-primary" :disabled="!canConfirmClarify || loading">
+          {{ confirmSource === 'clarify' ? '确认并继续' : '按这些信息继续' }}
+        </button>
+        <button type="button" class="btn btn-quiet" :disabled="loading" @click="closeConfirm">先不填</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="/map.js?v=read"></script>
+  <script src="/samples.js?v=read4"></script>
+  <script src="/app.js?v=read14"></script>
 </body>
 </html>

@@ -11,13 +11,40 @@ import os
 from typing import Any
 
 from dotenv import find_dotenv, load_dotenv
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
 load_dotenv(find_dotenv())
 
 DEFAULT_MCP_12306_URL = "https://mcp.api-inference.modelscope.net/4654213017684d/mcp"
 MCP_TIMEOUT_SECONDS = 15
 MCP_RETRY_TIMES = 2
+
+
+class TicketBackendUnavailable(RuntimeError):
+    """缺可选依赖（langchain_mcp_adapters）时抛。
+
+    只表示「本机没装票务适配器」，不是查询失败；调用方据此把票务标为
+    unavailable 并保留 dependency_missing 诊断，绝不假装查过票。
+    """
+
+
+# 惰性填充：导入时不去碰可选依赖，首次真正连票时才解析。
+# 同时也让测试可以 patch planner.ticket_agent.MultiServerMCPClient。
+MultiServerMCPClient: Any = None
+
+
+def _mcp_client_class() -> Any:
+    """惰性取 MCP 客户端类。缺包时抛 TicketBackendUnavailable，不拖垮模块导入。"""
+    global MultiServerMCPClient
+    if MultiServerMCPClient is not None:
+        return MultiServerMCPClient
+    try:
+        from langchain_mcp_adapters.client import MultiServerMCPClient as _client_class
+    except ImportError as exc:  # pragma: no cover - 取决于安装环境
+        raise TicketBackendUnavailable(
+            "langchain_mcp_adapters 未安装，无法连接 12306 MCP"
+        ) from exc
+    MultiServerMCPClient = _client_class
+    return _client_class
 
 TICKET_AGENT_PROMPT = """
 你是一名12306车票规划助手。
@@ -51,11 +78,17 @@ async def aclose_mcp_client(client: Any) -> None:
         await result
 
 
-async def build_ticket_agent() -> tuple[dict[str, Any], Any]:
-    """连接 12306 MCP，返回 (子智能体配置, client)。失败抛给缓存层降级。"""
+async def build_ticket_agent(budget: Any = None) -> tuple[dict[str, Any], Any]:
+    """连接 12306 MCP，返回 (子智能体配置, client)。每次发现工具都计入外部尝试。
+
+    缺依赖直接抛 TicketBackendUnavailable，不返回半成品 spec。
+    """
+    client_class = _mcp_client_class()
     last_error: BaseException | None = None
     for _ in range(MCP_RETRY_TIMES):
-        client = MultiServerMCPClient(
+        if budget is not None and not budget.note_attempt():
+            raise TimeoutError("ticket connect budget exhausted")
+        client = client_class(
             {
                 "12306-mcp": {
                     "transport": "streamable_http",
@@ -63,10 +96,15 @@ async def build_ticket_agent() -> tuple[dict[str, Any], Any]:
                 }
             }
         )
+        timeout = MCP_TIMEOUT_SECONDS
+        if budget is not None:
+            timeout = min(timeout, budget.timeout_for(MCP_TIMEOUT_SECONDS))
         try:
+            if timeout <= 0:
+                raise TimeoutError("ticket connect budget exhausted")
             ticket_tools = await asyncio.wait_for(
                 client.get_tools(),
-                timeout=MCP_TIMEOUT_SECONDS,
+                timeout=timeout,
             )
             spec = {
                 "name": "ticket_agent",
@@ -75,6 +113,9 @@ async def build_ticket_agent() -> tuple[dict[str, Any], Any]:
                 "tools": ticket_tools,
             }
             return spec, client
+        except asyncio.CancelledError:
+            await aclose_mcp_client(client)
+            raise
         except Exception as exc:
             last_error = exc
             await aclose_mcp_client(client)

@@ -30,7 +30,7 @@
 - 跨城但 MCP 失败：`unavailable`，关键词「不可用」
 - 已挂载只调 map：`missed` + warning `ticket_not_dispatched`，关键词「未调度」
 - dispatch 超时无 ticket chunk：`timeout`，关键词「超时」
-- 需要找景点时调度不设超时，等 map 写完或客户端断开；不得因 `DISPATCH_TIMEOUT` 标成跳过
+- 地图和票务使用工作预算里的阶段上限。工作截止后不再发新的外部调用，已开始的阶段可以标成 `dispatch_timeout`
 - 用户说「不要地图」或「不要找景点」：跳过 map，不生成 HTML
 - 修订 map_only：不调用 `extract_slots` / `get_ticket_agent`；票务态 `reused` 或 `skipped`
 - `plan_id=../../.env`：error，不读盘

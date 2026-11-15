@@ -30,6 +30,13 @@ workspace/results/snapshots/*
 
 # 日志与临时文件
 logs/
+workspace/**/*.log
+workspace/**/*.err.log
+workspace/**/*.out.log
+workspace/**/*.pid
+workspace/**/*.sqlite
+workspace/**/*.sqlite3
+workspace/**/*.db
 amap-lbs-skill/_tr_*.json
 amap-lbs-skill/_probe_out.txt
 *.log

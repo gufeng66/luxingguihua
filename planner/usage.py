@@ -42,15 +42,31 @@ class TokenUsage:
         self.prompt_tokens += prompt
         self.completion_tokens += completion
 
-    def as_dict(self) -> dict[str, int | float]:
-        inn = float(os.getenv("TOKEN_USD_PER_M_IN") or 0)
-        out = float(os.getenv("TOKEN_USD_PER_M_OUT") or 0)
+    def as_dict(self) -> dict[str, int | float | str | None]:
+        raw_in = (os.getenv("TOKEN_USD_PER_M_IN") or "").strip()
+        raw_out = (os.getenv("TOKEN_USD_PER_M_OUT") or "").strip()
+        try:
+            inn = float(raw_in) if raw_in else 0.0
+            out = float(raw_out) if raw_out else 0.0
+        except ValueError:
+            inn = out = 0.0
+        if inn <= 0 or out <= 0:
+            return {
+                "prompt_tokens": self.prompt_tokens,
+                "completion_tokens": self.completion_tokens,
+                "cost_usd": None,
+                "cost_label": "成本未知",
+            }
         cost = (self.prompt_tokens * inn + self.completion_tokens * out) / 1_000_000
         return {
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "cost_usd": round(cost, 6),
+            "cost_label": f"{round(cost, 6)} USD",
         }
+
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
 
 
 def begin_usage() -> TokenUsage:

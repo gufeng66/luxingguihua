@@ -1,0 +1,6 @@
+[
+  {
+    "type": "text",
+    "text": "[{\"train_no\":\"56000C306611\",\"start_date\":\"2026-11-10\",\"arrive_date\":\"2026-11-10\",\"start_train_code\":\"C3066\",\"start_time\":\"06:41\",\"arrive_time\":\"07:44\",\"lishi\":\"01:03\",\"from_station\":\"杭州西\",\"to_station\":\"苏州南\",\"prices\":[{\"seat_name\":\"二等座\",\"num\":\"有\",\"price\":50}],\"dw_flag\":[\"静音车厢\"]}]"
+  }
+]

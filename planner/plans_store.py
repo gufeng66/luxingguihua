@@ -13,8 +13,9 @@ from typing import Any
 
 logger = logging.getLogger("travel_planner")
 
-_DROP = ("prompt_tokens", "completion_tokens", "cost_usd")
+_DROP: tuple[str, ...] = ()
 _plans = 0
+_reliable = 0
 _failures = 0
 _latency_ms = 0
 
@@ -26,6 +27,13 @@ def db_path() -> Path:
     from planner.paths import RESULTS_DIR
 
     return RESULTS_DIR / "plans.db"
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(plans)")}
+    for name in ("quality", "outcome", "usage"):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE plans ADD COLUMN {name} TEXT")
 
 
 def _connect() -> sqlite3.Connection:
@@ -46,6 +54,7 @@ def _connect() -> sqlite3.Connection:
         )
         """
     )
+    _ensure_columns(conn)
     return conn
 
 
@@ -55,16 +64,18 @@ def latency_timings(timings: dict[str, Any] | None) -> dict[str, Any]:
     return {key: value for key, value in timings.items() if key not in _DROP}
 
 
-def _note(ok: bool, total_ms: int | None) -> dict[str, int]:
-    global _plans, _failures, _latency_ms
-    if ok:
+def _note(outcome: str, reliable: bool, total_ms: int | None) -> dict[str, int]:
+    global _plans, _reliable, _failures, _latency_ms
+    if outcome == "finished":
         _plans += 1
         if total_ms:
             _latency_ms += int(total_ms)
-    else:
+    if reliable:
+        _reliable += 1
+    if outcome == "error":
         _failures += 1
     avg = int(_latency_ms / _plans) if _plans else 0
-    return {"plans": _plans, "failures": _failures, "avg_ms": avg}
+    return {"plans": _plans, "reliable": _reliable, "failures": _failures, "avg_ms": avg}
 
 
 def record_plan_sync(
@@ -76,18 +87,22 @@ def record_plan_sync(
     timings: dict[str, Any] | None,
     artifact: str | None,
     ok: bool,
+    outcome: str | None = None,
+    quality: dict[str, Any] | None = None,
+    usage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     clean = latency_timings(timings)
     total = clean.get("total_ms")
-    stats = _note(ok, int(total) if isinstance(total, (int, float)) else None)
+    stored_outcome = outcome or ("finished" if ok else "error")
+    stats = _note(stored_outcome, ok and stored_outcome == "finished", int(total) if isinstance(total, (int, float)) else None)
     try:
         conn = _connect()
         try:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO plans
-                (plan_id, query, slots, status, timings, artifact, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (plan_id, query, slots, status, timings, artifact, created_at, quality, outcome, usage)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     plan_id,
@@ -97,6 +112,9 @@ def record_plan_sync(
                     json.dumps(clean, ensure_ascii=False),
                     artifact,
                     datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    json.dumps(quality, ensure_ascii=False) if quality is not None else None,
+                    stored_outcome,
+                    json.dumps(usage, ensure_ascii=False) if usage is not None else None,
                 ),
             )
             conn.commit()
@@ -104,8 +122,8 @@ def record_plan_sync(
             conn.close()
     except Exception:
         logger.exception("plans_db insert failed plan_id=%s", plan_id)
-    payload = {"plan_id": plan_id, "status": status, "timings": clean, **stats}
-    logger.info("%s", json.dumps(payload, ensure_ascii=False))
+    payload = {"plan_id": plan_id, "status": status, "outcome": stored_outcome, "timings": clean, **stats}
+    logger.info("%s", json.dumps({key: payload[key] for key in ("plan_id", "status", "outcome") if key in payload}, ensure_ascii=False))
     return payload
 
 
@@ -121,7 +139,7 @@ def list_plans(limit: int = 20) -> list[dict[str, Any]]:
     try:
         rows = conn.execute(
             """
-            SELECT plan_id, query, slots, status, timings, artifact, created_at
+            SELECT plan_id, query, slots, status, timings, artifact, created_at, quality, outcome, usage
             FROM plans ORDER BY created_at DESC LIMIT ?
             """,
             (limit,),
@@ -129,7 +147,7 @@ def list_plans(limit: int = 20) -> list[dict[str, Any]]:
     finally:
         conn.close()
     out: list[dict[str, Any]] = []
-    for plan_id, query, slots, status, timings, artifact, created_at in rows:
+    for plan_id, query, slots, status, timings, artifact, created_at, quality, outcome, usage in rows:
         out.append(
             {
                 "plan_id": plan_id,
@@ -139,6 +157,10 @@ def list_plans(limit: int = 20) -> list[dict[str, Any]]:
                 "timings": json.loads(timings) if timings else {},
                 "artifact": artifact,
                 "created_at": created_at,
+                "quality": json.loads(quality) if quality else None,
+                "quality_label": "未记录核实状态" if not quality else None,
+                "outcome": outcome,
+                "usage": json.loads(usage) if usage else None,
             }
         )
     return out

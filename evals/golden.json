@@ -3,23 +3,26 @@
     {
       "case_id": "cross_city_hsr",
       "mode": "live",
-      "query": "这周六从新乡坐高铁去郑州一日游，预算 500，少折腾",
+      "date_expression": "next_saturday",
+      "query_template": "请规划 {trip_date} 从新乡坐高铁去郑州一日游，预算 500，少折腾",
       "expect": {"need_ticket": true, "need_map": true}
     },
     {
       "case_id": "xinxiang_drive_luoyang",
       "mode": "live",
       "rounds": "clarify_then_slots",
-      "query": "下周从新乡租电车自驾去洛阳两天，轻松点，别安排开封和宝泉",
-      "slots": {"origin": "新乡", "destination": "洛阳", "date": "2026-10-19", "days": 2, "lodging": "洛阳老城酒店"},
+      "date_expression": "next_saturday",
+      "query_template": "请规划 {trip_date} 从新乡租电车自驾去洛阳两天，轻松点，别安排开封和宝泉",
+      "slots": {"origin": "新乡", "destination": "洛阳", "days": 2, "lodging": "洛阳老城酒店"},
       "expect": {"first": "clarify", "need_ticket": false, "need_map": true, "ticket_reason": "skipped"}
     },
     {
       "case_id": "hitl_zhengzhou",
       "mode": "live",
       "rounds": "clarify_then_slots",
-      "query": "周末去郑州玩",
-      "slots": {"origin": "新乡", "destination": "郑州", "date": "2026-10-17", "days": 1},
+      "date_expression": "next_saturday",
+      "query_template": "请规划 {trip_date} 去郑州玩",
+      "slots": {"origin": "新乡", "destination": "郑州", "days": 1},
       "expect": {"first": "clarify", "second_need_ticket": true}
     },
     {
@@ -33,7 +36,8 @@
       "case_id": "mcp_unavailable",
       "mode": "live",
       "mcp_url": "http://127.0.0.1:1/mcp",
-      "query": "这周六从新乡坐高铁去郑州一日游，预算 500，少折腾",
+      "date_expression": "next_saturday",
+      "query_template": "请规划 {trip_date} 从新乡坐高铁去郑州一日游，预算 500，少折腾",
       "expect": {"ticket_reason": "unavailable"}
     },
     {

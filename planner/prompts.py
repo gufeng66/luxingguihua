@@ -5,6 +5,12 @@
     MAIN_AGENT_PROMPT：槽位已确认时用。
     MAIN_AGENT_PROMPT_LEGACY：抽取失败、没有结构化槽位时用（允许模型自己理解）。
     build_main_prompt() 按「要不要票 / 要不要地图 / 是不是只改景点」往模板里填补丁。
+
+【历史模块，非当前主路径】
+    这两份提示与 _SHARED_RULES 是 deepagents create_deep_agent 时代的产物，
+    _SHARED_RULES 里的 /workspace 虚拟路径、「调度完子智能体后只输出一句状态」
+    对当前 stream_plan 都不成立。planner_service 仍导出 build_main_prompt 供
+    evals/test_unit.py 的历史用例调用；生产代码不使用它生成主智能体提示。
 """
 
 from __future__ import annotations

@@ -1,0 +1,18 @@
+{
+  "version": "integration-v1",
+  "default_result_when_prerequisite_missing": "blocked",
+  "scenarios": [
+    {"id":"integration_model_slot_extract","requires":["OPENAI_API_KEY"],"online":true,"terminal":"finished"},
+    {"id":"integration_mcp_available","requires":["OPENAI_API_KEY","MCP_12306_URL"],"online":true,"terminal":"finished"},
+    {"id":"integration_mcp_unavailable","requires":["OPENAI_API_KEY"],"online":true,"terminal":"finished","ticket_reason":"unavailable"},
+    {"id":"integration_mcp_timeout","requires":["OPENAI_API_KEY","MCP_12306_URL"],"online":true,"terminal":"finished","ticket_reason":"timeout"},
+    {"id":"integration_amap_poi","requires":["OPENAI_API_KEY","AMAP_WEBSERVICE_KEY"],"online":true,"terminal":"finished"},
+    {"id":"integration_amap_route","requires":["OPENAI_API_KEY","AMAP_WEBSERVICE_KEY"],"online":true,"terminal":"finished"},
+    {"id":"integration_tavily_opening","requires":["OPENAI_API_KEY","TAVILY_API_KEY"],"online":true,"terminal":"finished"},
+    {"id":"integration_ticket_reuse","requires":["OPENAI_API_KEY","MCP_12306_URL"],"online":true,"terminal":"finished","ticket_reason":"reused"},
+    {"id":"integration_map_only_revision","requires":["OPENAI_API_KEY","AMAP_WEBSERVICE_KEY"],"online":true,"terminal":"finished"},
+    {"id":"integration_no_route","requires":["OPENAI_API_KEY","AMAP_WEBSERVICE_KEY"],"online":true,"terminal":"finished"},
+    {"id":"integration_summary_degraded","requires":["OPENAI_API_KEY"],"online":true,"terminal":"finished","quality_status":"degraded"},
+    {"id":"integration_sse_disconnect","requires":["OPENAI_API_KEY"],"online":true,"terminal":"cancelled"}
+  ]
+}

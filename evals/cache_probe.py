@@ -1,8 +1,6 @@
-"""同一进程里测车票 MCP 冷热握手。不进 CI。
+"""确认每次票务连接都是新的。不进 CI。
 
 用法：python -m evals.cache_probe
-第一次必须拿到 agent 且 cache_hit 为 false，第二次才算热缓存。
-冷握手失败会进 30 秒冷却，第二次返回 None，不是命中。
 """
 
 from __future__ import annotations
@@ -10,20 +8,19 @@ from __future__ import annotations
 import asyncio
 import json
 
-from planner.ticket_cache import get_ticket_agent, last_lookup
+from planner.ticket_cache import close_ticket_agent, get_ticket_agent
 
 
 async def main() -> int:
     first = await get_ticket_agent()
-    cold = last_lookup()
-    print("cold", json.dumps({"agent": first is not None, **cold}, ensure_ascii=False))
-    if first is None or cold.get("cache_hit"):
-        print("hot skipped")
-        return 2
     second = await get_ticket_agent()
-    hot = last_lookup()
-    print("hot", json.dumps({"agent": second is not None, **hot}, ensure_ascii=False))
-    return 0 if second is not None and hot.get("cache_hit") else 2
+    print("first", json.dumps({"agent": first is not None, **((first or {}).get("diag") or {})}, ensure_ascii=False))
+    print("second", json.dumps({"agent": second is not None, **((second or {}).get("diag") or {})}, ensure_ascii=False))
+    await close_ticket_agent(first)
+    await close_ticket_agent(second)
+    if first is None or second is None:
+        return 2
+    return 0 if first is not second else 2
 
 
 if __name__ == "__main__":

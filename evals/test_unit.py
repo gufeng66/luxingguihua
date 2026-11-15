@@ -377,7 +377,9 @@ def test_ensure_route_map_writes_html(tmp_path, monkeypatch: pytest.MonkeyPatch)
     for names in by_day.values():
         assert names[0] == "北京西站" and names[-1] == "北京西站"
         assert len(names) >= 3
-    assert "返回住宿地" in html
+    # P1-6：住宿精度贯穿地图备注。lodging="北京西站" 被 _lodging_precision 判为区域参考（车站不含住宿设施词，不算具体住宿），
+    # 出发/返回点的地图备注应为「区域参考起点」而非旧固定文案「返回住宿地」。
+    assert "区域参考起点" in html
     stay_xy = [116.322, 39.895]
     ordered: dict[int, list[dict]] = {}
     for item in data:
@@ -511,42 +513,56 @@ def test_map_iframe_sandbox_allows_amap_popups() -> None:
     assert "setMapDay" in html
 
 
+def test_closing_clarify_dialog_does_not_lock_the_page() -> None:
+    """关掉澄清弹窗不能把整页锁死：输入框要能打字，还要留一个「继续补充」的入口。"""
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    # 页面要有「继续补充」入口，而不是关掉之后无处可回。
+    assert "clarifyDeferred" in html
+    assert "resumeClarify" in html
+    assert "继续补充" in html
+
+    # 输入框/开始按钮只受 awaitingClarify 约束，关弹窗时必须把该标记清掉。
+    assert 'data-field="query"' in html or 'v-model="query"' in html
+    assert ":disabled=\"awaitingClarify\"" in html
+    assert "this.awaitingClarify = false" in script
+    assert "this.clarifyDeferred = true" in script
+    assert "awaitingClarify: false" in script
+
+
 @pytest.mark.asyncio
-async def test_ticket_cache_single_handshake_and_fail_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
-    """并发只握手一次；失败后冷却期内不再连 MCP。"""
+async def test_ticket_sessions_are_independent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """每个规划单独握手。一个失败不会让另一个跳过连接。"""
     import asyncio
 
     import planner.ticket_cache as tc
 
-    tc._ticket_cache = None
-    tc._fail_until = 0.0
     calls = 0
-    spec = {"name": "ticket_agent"}
 
-    async def ok_build():
+    async def ok_build(_budget=None):
         nonlocal calls
         calls += 1
-        await asyncio.sleep(0.05)
-        return spec, object()
+        await asyncio.sleep(0.01)
+        return {"name": "ticket_agent", "tools": []}, object()
 
     monkeypatch.setattr(tc, "build_ticket_agent", ok_build)
     first, second = await asyncio.gather(tc.get_ticket_agent(), tc.get_ticket_agent())
-    assert first is spec and second is spec
-    assert calls == 1
+    assert first and second and first is not second
+    assert calls == 2
+    await tc.close_ticket_agent(first)
+    assert second.get("_client") is not None
 
-    async def down():
+    async def down(_budget=None):
         nonlocal calls
         calls += 1
         raise RuntimeError("mcp down")
 
-    tc._ticket_cache = None
+    calls = 0
     monkeypatch.setattr(tc, "build_ticket_agent", down)
     assert await tc.get_ticket_agent() is None
     assert await tc.get_ticket_agent() is None
     assert calls == 2
-    assert tc.last_lookup()["connect_ms"] == 0.0
-    tc._ticket_cache = None
-    tc._fail_until = 0.0
 
 
 @pytest.mark.asyncio
