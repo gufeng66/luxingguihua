@@ -1270,13 +1270,19 @@ async def stream_plan(
         yield {"type": "status", "message": "正在理解需求…" if not revision_kind else "正在理解修改意见…"}
         t_understand = time.monotonic()
 
-        llm = svc.build_llm()
+        llm = None
+
+        def ensure_llm() -> Any:
+            nonlocal llm
+            if llm is None:
+                llm = svc.build_llm()
+            return llm
 
         if snapshot is not None:
             # 修订/确认统一顺序：合并 → 求差 → 按变化失效 → 应用本轮确认 → 决定路由。
             if confirmed is None and revision_kind != "summary_only":
                 try:
-                    overlay = slots_for_plan(await _extract(svc, query, llm, budget))
+                    overlay = slots_for_plan(await _extract(svc, query, ensure_llm(), budget))
                 except Exception:
                     logger.exception("revision_extract_failed")
                     yield {"type": "error", "message": "没能从修改意见里解析出可执行的变化，请换个说法再试"}
@@ -1343,7 +1349,7 @@ async def stream_plan(
             yield {"type": "slots", "slots": confirmed.model_dump()}
         else:
             try:
-                extracted = slots_for_plan(await _extract(svc, query, llm, budget))
+                extracted = slots_for_plan(await _extract(svc, query, ensure_llm(), budget))
                 yield {"type": "slots", "slots": extracted.model_dump()}
                 if should_clarify(extracted, slots_from_client=False):
                     yield _clarify_event(extracted, request_ctx=request_ctx)
@@ -1621,7 +1627,7 @@ async def stream_plan(
                     need_map=need_map,
                     need_ticket=ticket_agent is not None,
                     ticket_tools=list((ticket_agent or {}).get("tools") or []),
-                    llm=llm,
+                    llm=ensure_llm(),
                     query=user_content,
                     budget=budget,
                     cancel_event=cancel_event,
@@ -2015,7 +2021,7 @@ async def stream_plan(
         # 「事后检查写了什么」会各算一套。candidates 用本轮最终候选（复用轮继承而来）。
         poi_whitelist = itinerary_whitelist(itinerary, unlocated=unlocated, candidates=saved_candidates)
         summary_kwargs = dict(
-            llm=llm,
+            llm=ensure_llm(),
             query=query,
             slots=confirmed,
             map_context=map_context,
